@@ -55,6 +55,9 @@ succeed.
 | `UNSUPPORTED_MEDIA_TYPE` | 415 | 2 | no | A control request whose body is not `application/json`. | Send the request body as JSON with Content-Type: application/json. |
 | `NO_MATCH` | 404 | 3 | no | A library search found nothing to play. | Try fewer or other words: a composer's surname, a performer, or a catalog number (bwv 988). |
 
+| `SPOTIFY_NOT_CONFIGURED` | 503 | 1 | no | Spotify sign-in has no configured app client id. | Set FSONOS_SPOTIFY_CLIENT_ID and register the redirect URI in the Spotify dashboard. |
+| `FORBIDDEN_NOT_LOOPBACK` | 403 | 5 | no | Spotify sign-in requires a loopback caller. | Open the sign-in page through an SSH tunnel to the daemon's loopback listener. |
+
 ## Notes
 
 A successful response can carry notes about how the request was carried out.

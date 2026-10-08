@@ -18,10 +18,11 @@ use asupersync::runtime::{Runtime, RuntimeBuilder, reactor::create_reactor};
 
 use crate::client::{Endpoints, SCOPE, SpotifyConfig, base64url, parse_query, sha256};
 
-pub(crate) const CLIENT_ID: &str = "0123456789abcdef0123456789abcdef";
-pub(crate) const REDIRECT: &str = "http://127.0.0.1:8099/auth/spotify/callback";
+pub const CLIENT_ID: &str = "0123456789abcdef0123456789abcdef";
+pub const REDIRECT: &str = "http://127.0.0.1:8099/auth/spotify/callback";
 
-pub(crate) fn runtime() -> Runtime {
+#[must_use]
+pub fn runtime() -> Runtime {
     RuntimeBuilder::current_thread()
         .with_reactor(create_reactor().expect("reactor"))
         .blocking_threads(0, 4)
@@ -31,21 +32,23 @@ pub(crate) fn runtime() -> Runtime {
 
 /// What the fake Spotify has seen and will accept.
 #[derive(Default)]
-pub(crate) struct Fake {
-    pub(crate) base: String,
-    pub(crate) expected_challenge: Option<String>,
-    pub(crate) access: String,
-    pub(crate) refresh: String,
-    pub(crate) refreshes: usize,
-    pub(crate) rate_limit_tracks_once: bool,
+pub struct Fake {
+    pub base: String,
+    pub expected_challenge: Option<String>,
+    pub access: String,
+    pub refresh: String,
+    pub refreshes: usize,
+    pub rate_limit_tracks_once: bool,
     /// Serve this liked-tracks page instead of the fixture.
-    pub(crate) liked_tracks: Option<String>,
+    pub liked_tracks: Option<String>,
     /// Answer this many album-tracks requests (any album) with a 429.
-    pub(crate) rate_limit_albums: u32,
-    pub(crate) log: Vec<String>,
+    pub rate_limit_albums: u32,
+    pub log: Vec<String>,
+    pub token_error: Option<(u16, String)>,
+    pub liked_count: Option<usize>,
 }
 
-pub(crate) fn json(status: u16, body: impl Into<Vec<u8>>) -> Response {
+pub fn json(status: u16, body: impl Into<Vec<u8>>) -> Response {
     Response::new(status, "", body).with_header("Content-Type", "application/json")
 }
 
@@ -63,6 +66,9 @@ fn respond(fake: &Mutex<Fake>, req: &Request) -> Response {
     let mut fake = fake.lock().unwrap();
     fake.log.push(format!("{:?} {}", req.method, req.uri));
     if req.method == Method::Post && req.uri == "/api/token" {
+        if let Some((status, body)) = &fake.token_error {
+            return json(*status, body.clone());
+        }
         let form = parse_query(std::str::from_utf8(&req.body).unwrap()).unwrap();
         let get = |k: &str| {
             form.iter()
@@ -112,10 +118,12 @@ fn respond(fake: &Mutex<Fake>, req: &Request) -> Response {
     };
     let uri = req.uri.as_str();
     if uri.starts_with("/v1/me/albums") && uri.contains("offset=0") {
-        json(
-            200,
-            rewrite(include_bytes!("../tests/fixtures/saved_albums_page.json")),
-        )
+        let mut page: serde_json::Value =
+            serde_json::from_slice(include_bytes!("../tests/fixtures/saved_albums_page.json"))
+                .unwrap();
+        page["items"][0]["album"]["images"] =
+            serde_json::json!([{ "url": "https://cdn.example.invalid/bach.jpg" }]);
+        json(200, rewrite(page.to_string().as_bytes()))
     } else if uri.starts_with("/v1/me/albums") {
         json(
             200,
@@ -125,6 +133,9 @@ fn respond(fake: &Mutex<Fake>, req: &Request) -> Response {
         if fake.rate_limit_tracks_once {
             fake.rate_limit_tracks_once = false;
             return json(429, "").with_header("Retry-After", "1");
+        }
+        if let Some(count) = fake.liked_count {
+            return liked_page(uri, count, &fake.base);
         }
         if let Some(page) = &fake.liked_tracks {
             return json(200, page.clone());
@@ -141,6 +152,27 @@ fn respond(fake: &Mutex<Fake>, req: &Request) -> Response {
     } else {
         not_found()
     }
+}
+
+fn liked_page(uri: &str, count: usize, base: &str) -> Response {
+    let offset = parse_query(uri.split_once('?').unwrap().1)
+        .unwrap()
+        .into_iter()
+        .find(|(key, _)| key == "offset")
+        .unwrap()
+        .1
+        .parse::<usize>()
+        .unwrap();
+    let end = (offset + 50).min(count);
+    let items: Vec<_> = (offset..end).map(|n| serde_json::json!({
+                "track": { "id": format!("liked{n:022}"), "uri": format!("spotify:track:liked{n:022}"),
+                "name": format!("Suite in D Major: Movement {n}"), "artists": [{"name":"Johann Sebastian Bach"}],
+                "duration_ms": 120_000, "disc_number": 1, "track_number": n + 1,
+                "album": { "id":"likedalbum", "uri":"spotify:album:likedalbum", "name":"Liked Album",
+                "images":[{"url":"https://cdn.example.invalid/liked.jpg"}] } }
+            })).collect();
+    let next = (end < count).then(|| format!("{base}/me/tracks?offset={end}&limit=50"));
+    json(200, serde_json::json!({ "items":items, "next":next, "offset":offset, "limit":50, "total":count }).to_string())
 }
 
 fn not_found() -> Response {
@@ -180,15 +212,16 @@ fn album_tracks(uri: &str, rewrite: impl Fn(&[u8]) -> String) -> Response {
 }
 
 /// A fake Spotify on a loopback port, served from its own thread.
-pub(crate) struct FakeSpotify {
-    pub(crate) addr: SocketAddr,
-    pub(crate) state: Arc<Mutex<Fake>>,
+pub struct FakeSpotify {
+    pub addr: SocketAddr,
+    pub state: Arc<Mutex<Fake>>,
     shutdown: Box<dyn FnOnce()>,
     thread: thread::JoinHandle<()>,
 }
 
 impl FakeSpotify {
-    pub(crate) fn start() -> Self {
+    #[must_use]
+    pub fn start() -> Self {
         let state = Arc::new(Mutex::new(Fake::default()));
         let shared = Arc::clone(&state);
         let config = Http1ListenerConfig::default().http_config(
@@ -228,14 +261,16 @@ impl FakeSpotify {
         }
     }
 
-    pub(crate) fn endpoints(&self) -> Endpoints {
+    #[must_use]
+    pub fn endpoints(&self) -> Endpoints {
         Endpoints {
             token: format!("http://{}/api/token", self.addr),
             api: format!("http://{}/v1", self.addr),
         }
     }
 
-    pub(crate) fn stop(self) -> Fake {
+    #[allow(clippy::must_use_candidate)]
+    pub fn stop(self) -> Fake {
         (self.shutdown)();
         self.thread.join().expect("server thread");
         Arc::try_unwrap(self.state)
@@ -246,23 +281,30 @@ impl FakeSpotify {
     }
 }
 
-pub(crate) fn scratch_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "fsonos-spotify-session-{}-{name}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    dir
+pub fn scratch_dir(name: &str) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "fsonos-spotify-session-{}-{name}-{stamp}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ))
 }
 
-pub(crate) fn config() -> SpotifyConfig {
+#[must_use]
+pub fn config() -> SpotifyConfig {
     SpotifyConfig {
         client_id: CLIENT_ID.into(),
         redirect_uri: REDIRECT.into(),
     }
 }
 
-pub(crate) fn query_param(url: &str, key: &str) -> String {
+#[must_use]
+pub fn query_param(url: &str, key: &str) -> String {
     let query = url.split_once('?').unwrap().1;
     parse_query(query)
         .unwrap()

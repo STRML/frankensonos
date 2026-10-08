@@ -61,6 +61,29 @@ pub struct LibraryEntry {
     pub work_key: Option<String>,
 }
 
+/// Album metadata returned by Spotify, including its public artwork URL.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SpotifyAlbum {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub year: Option<u32>,
+    pub tracks: u32,
+    pub uri: String,
+    pub art_url: Option<String>,
+    pub saved: bool,
+}
+
+/// Membership and metadata of the last complete Spotify library read.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SpotifyCache {
+    pub albums: Vec<SpotifyAlbum>,
+    pub liked_uris: Vec<String>,
+    #[serde(default)]
+    pub track_uris: Vec<String>,
+    pub synced_at: Option<i64>,
+}
+
 /// How a track got into the owner's library.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LibraryOrigin {
@@ -289,6 +312,12 @@ pub trait Store {
     /// The whole library cache, ordered by `added` then `source_uri`.
     fn library(&self) -> Result<Vec<LibraryEntry>, StoreError>;
 
+    /// The last complete browse cache, empty before the first sync.
+    fn spotify_cache(&self) -> Result<SpotifyCache, StoreError>;
+
+    /// Replace the browse cache after a complete library read.
+    fn save_spotify_cache(&mut self, cache: &SpotifyCache) -> Result<(), StoreError>;
+
     /// Remember the Spotify render parameters learned for `household`.
     fn save_render_params(
         &mut self,
@@ -419,6 +448,7 @@ pub struct MemStore {
     players: BTreeMap<(String, String), CachedPlayer>,
     groups: BTreeMap<String, Vec<ZoneGroup>>,
     library: BTreeMap<String, LibraryEntry>,
+    spotify_cache: SpotifyCache,
     render_params: BTreeMap<String, (SpotifyRenderParams, i64)>,
     auth: BTreeMap<String, AuthEntry>,
     dj_sessions: BTreeMap<String, DjSession>,
@@ -513,6 +543,15 @@ impl Store for MemStore {
         let mut all: Vec<LibraryEntry> = self.library.values().cloned().collect();
         all.sort_by(|a, b| (a.added, &a.track.source_uri).cmp(&(b.added, &b.track.source_uri)));
         Ok(all)
+    }
+
+    fn spotify_cache(&self) -> Result<SpotifyCache, StoreError> {
+        Ok(self.spotify_cache.clone())
+    }
+
+    fn save_spotify_cache(&mut self, cache: &SpotifyCache) -> Result<(), StoreError> {
+        self.spotify_cache = cache.clone();
+        Ok(())
     }
 
     fn save_render_params(

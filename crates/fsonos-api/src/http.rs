@@ -97,7 +97,18 @@ fn openapi_document(entries: &[RouteEntry]) -> String {
         .cloned()
         .fold(App::builder().openapi(config), AppBuilder::route_entry)
         .build();
-    documented.openapi_spec().unwrap_or("{}").to_string()
+    let mut spec: serde_json::Value =
+        serde_json::from_str(documented.openapi_spec().unwrap_or("{}")).unwrap();
+    let login = &mut spec["paths"]["/auth/spotify/login"]["get"]["responses"]["302"];
+    login.as_object_mut().unwrap().remove("content");
+    login["headers"] = serde_json::json!({
+        "Location": {"description": "Spotify consent URL", "schema": {"type": "string"}}
+    });
+    for status in ["200", "400"] {
+        spec["paths"]["/auth/spotify/callback"]["get"]["responses"][status]["content"] =
+            serde_json::json!({"text/html": {"schema": {"type": "string"}}});
+    }
+    serde_json::to_string(&spec).unwrap()
 }
 
 const DAEMON: &str = "daemon";
@@ -113,7 +124,167 @@ fn routes(cx: &Ctx<'_>) -> Vec<RouteEntry> {
     routes.extend(house(cx));
     routes.extend(controls(cx));
     routes.extend(house_verbs(cx));
+    routes.extend(spotify(cx));
     routes
+}
+
+fn spotify_auth(cx: &Ctx<'_>) -> Vec<RouteEntry> {
+    vec![
+        cx.route(
+            &Op::get(
+                "/auth/spotify/login",
+                "spotify_login",
+                "spotify",
+                "Sign in to Spotify from loopback",
+            ),
+            |s, c, _| match s.spotify_login(c) {
+                Ok(url) => Response::with_status(fastapi::StatusCode::from_u16(302))
+                    .header("location", url.into_bytes())
+                    .header("cache-control", b"no-store".to_vec()),
+                Err(err) => err.http_response(),
+            },
+        )
+        .response_schema::<String>(302, "Redirect to Spotify consent"),
+        cx.route(
+            &Op::get(
+                "/auth/spotify/callback",
+                "spotify_callback",
+                "spotify",
+                "Complete Spotify sign-in from loopback",
+            ),
+            |s, c, req| {
+                s.spotify_callback(
+                    c,
+                    format!("/auth/spotify/callback?{}", req.query().unwrap_or_default()),
+                )
+            },
+        )
+        .query_schema::<SpotifyCallbackQuery>(false)
+        .response_schema::<String>(200, "HTML: Signed in. You can close this tab.")
+        .response_schema::<String>(400, "HTML: invalid, expired or failed sign-in"),
+    ]
+}
+
+fn spotify(cx: &Ctx<'_>) -> Vec<RouteEntry> {
+    use crate::spotify::{AlbumsDto, StatusDto, SyncDto, TrackDto, TracksDto};
+    let mut entries = spotify_auth(cx);
+    entries.extend(vec![
+        cx.route(
+            &Op::get(
+                "/spotify/status",
+                "spotify_status",
+                "spotify",
+                "Spotify sign-in, library and sync progress",
+            ),
+            |s, c, _| answer(s.spotify_status(c)),
+        )
+        .response_schema::<StatusDto>(200, "Spotify status"),
+        cx.route(
+            &Op::post(
+                "/spotify/sync",
+                "spotify_sync",
+                "spotify",
+                "Start a single background library sync",
+            ),
+            |s, c, _| match s.spotify_sync(c) {
+                Ok(progress) => Response::with_status(fastapi::StatusCode::from_u16(202))
+                    .header("content-type", b"application/json".to_vec())
+                    .body(ResponseBody::Bytes(
+                        serde_json::to_vec(&progress).expect("SyncDto serializes"),
+                    )),
+                Err(err) => err.http_response(),
+            },
+        )
+        .response_schema::<SyncDto>(202, "Started sync, or the running sync's progress"),
+        cx.route(
+            &Op::get(
+                "/spotify/albums",
+                "list_spotify_albums",
+                "spotify",
+                "Saved albums in the library cache",
+            ),
+            |s, c, req| {
+                answer(spotify_list_query(req).and_then(|q| {
+                    s.spotify_albums(
+                        c,
+                        q.offset.unwrap_or(0),
+                        q.limit.unwrap_or(50),
+                        q.q.as_deref().unwrap_or_default(),
+                    )
+                }))
+            },
+        )
+        .query_schema::<SpotifyListQuery>(false)
+        .response_schema::<AlbumsDto>(200, "Saved albums"),
+        cx.route(
+            &Op::get(
+                "/spotify/albums/{id}/tracks",
+                "list_spotify_album_tracks",
+                "spotify",
+                "Cached tracks of a saved album",
+            ),
+            |s, c, req| answer(spotify_album_id(req).and_then(|id| s.spotify_album_tracks(c, &id))),
+        )
+        .response_schema::<Vec<TrackDto>>(200, "Album tracks, in disc and track order")
+        .path_schema::<String>(&["id"]),
+        cx.route(
+            &Op::get(
+                "/spotify/tracks",
+                "list_spotify_tracks",
+                "spotify",
+                "Liked tracks in the library cache",
+            ),
+            |s, c, req| {
+                answer(spotify_list_query(req).and_then(|q| {
+                    s.spotify_tracks(
+                        c,
+                        q.offset.unwrap_or(0),
+                        q.limit.unwrap_or(50),
+                        q.q.as_deref().unwrap_or_default(),
+                    )
+                }))
+            },
+        )
+        .query_schema::<SpotifyListQuery>(false)
+        .response_schema::<TracksDto>(200, "Liked tracks"),
+    ]);
+    entries
+}
+
+#[derive(JsonSchema, Serialize)]
+struct SpotifyCallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(JsonSchema)]
+struct SpotifyListQuery {
+    offset: Option<usize>,
+    /// 1 to 200, default 50.
+    limit: Option<usize>,
+    q: Option<String>,
+}
+
+fn spotify_list_query(req: &Request) -> Result<SpotifyListQuery, Failure> {
+    let limit = whole_number(req, "limit")?;
+    if limit.is_some_and(|n| n == 0 || n > 200) {
+        return Err(Failure::invalid("limit must be 1 to 200"));
+    }
+    Ok(SpotifyListQuery {
+        offset: whole_number(req, "offset")?,
+        limit,
+        q: query_param(req, "q")?,
+    })
+}
+
+fn spotify_album_id(req: &Request) -> Result<String, Failure> {
+    let raw = req
+        .get_extension::<PathParams>()
+        .and_then(|p| p.get("id"))
+        .unwrap_or_default();
+    percent_decode(raw)
+        .ok_or_else(|| Failure::invalid("album id is not valid percent-encoded UTF-8"))
 }
 
 /// Moving the music between rooms, and the whole-house party.

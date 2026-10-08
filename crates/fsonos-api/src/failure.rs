@@ -76,11 +76,15 @@ pub enum ErrorCode {
     UnsupportedMediaType,
     /// A library search found nothing to play.
     NoMatch,
+    /// Spotify sign-in has no configured app client id.
+    SpotifyNotConfigured,
+    /// Spotify sign-in is restricted to loopback callers.
+    ForbiddenNotLoopback,
 }
 
 impl ErrorCode {
     /// Every code, in documentation order.
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 25] = [
         Self::InvalidArgument,
         Self::UnknownRoom,
         Self::AmbiguousRoom,
@@ -104,6 +108,8 @@ impl ErrorCode {
         Self::UntrustedOrigin,
         Self::UnsupportedMediaType,
         Self::NoMatch,
+        Self::SpotifyNotConfigured,
+        Self::ForbiddenNotLoopback,
     ];
 
     /// The wire name, e.g. `UNKNOWN_ROOM`.
@@ -129,6 +135,8 @@ impl ErrorCode {
             Self::NotImplemented => "NOT_IMPLEMENTED",
             Self::UnknownFavorite => "UNKNOWN_FAVORITE",
             Self::NoMatch => "NO_MATCH",
+            Self::SpotifyNotConfigured => "SPOTIFY_NOT_CONFIGURED",
+            Self::ForbiddenNotLoopback => "FORBIDDEN_NOT_LOOPBACK",
             Self::AmbiguousFavorite => "AMBIGUOUS_FAVORITE",
             Self::UnplayableFavorite => "UNPLAYABLE_FAVORITE",
             Self::UntrustedOrigin => "UNTRUSTED_ORIGIN",
@@ -153,9 +161,9 @@ impl ErrorCode {
             | Self::RenderParamsMissing
             | Self::SpotifyAuthRequired
             | Self::AmbiguousFavorite => 409,
-            Self::PolicyDenied | Self::UntrustedOrigin => 403,
+            Self::PolicyDenied | Self::UntrustedOrigin | Self::ForbiddenNotLoopback => 403,
             Self::UnsupportedMediaType => 415,
-            Self::NotReady | Self::PlayerUnreachable => 503,
+            Self::NotReady | Self::PlayerUnreachable | Self::SpotifyNotConfigured => 503,
             Self::UpnpFault => 502,
             Self::Internal => 500,
             Self::NotImplemented => 501,
@@ -180,13 +188,14 @@ impl ErrorCode {
             | Self::UnknownFavorite
             | Self::NoMatch => 3,
             Self::NotReady | Self::PlayerUnreachable | Self::NotCoordinator => 4,
-            Self::PolicyDenied | Self::UntrustedOrigin => 5,
+            Self::PolicyDenied | Self::UntrustedOrigin | Self::ForbiddenNotLoopback => 5,
             Self::UpnpFault
             | Self::SpotifyNotLinked
             | Self::RenderParamsMissing
             | Self::SpotifyAuthRequired
             | Self::Internal
-            | Self::NotImplemented => 1,
+            | Self::NotImplemented
+            | Self::SpotifyNotConfigured => 1,
         }
     }
 
@@ -231,6 +240,12 @@ impl ErrorCode {
                 "Add any Spotify track to My Sonos in that household's app, then retry."
             }
             Self::SpotifyAuthRequired => "Sign in to Spotify on the daemon host, then retry.",
+            Self::SpotifyNotConfigured => {
+                "Set FSONOS_SPOTIFY_CLIENT_ID and register the redirect URI in the Spotify dashboard."
+            }
+            Self::ForbiddenNotLoopback => {
+                "Open the sign-in page through an SSH tunnel to the daemon's loopback listener."
+            }
             Self::PolicyDenied => "The house policy forbids this; ask the owner to change it.",
             Self::UnknownMood => "Use one of the suggested moods.",
             Self::NoDjSession => "Start the DJ in that zone first (dj_start).",

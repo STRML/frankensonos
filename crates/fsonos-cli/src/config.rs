@@ -217,6 +217,14 @@ pub struct ServeArgs {
     )]
     pub spotify_redirect_uri: String,
 
+    /// Accounts base URL override for tests and fakes only.
+    #[arg(long, env = "FSONOS_SPOTIFY_ACCOUNTS_URL")]
+    pub spotify_accounts_url: Option<String>,
+
+    /// Web API base URL override for tests and fakes only (including /v1).
+    #[arg(long, env = "FSONOS_SPOTIFY_API_URL")]
+    pub spotify_api_url: Option<String>,
+
     /// Port the players deliver their state-change events (GENA) to, on the
     /// address facing them. Fixed so a firewall rule can name it; 0 picks
     /// any free port.

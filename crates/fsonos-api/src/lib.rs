@@ -40,6 +40,7 @@ pub mod plan;
 pub mod reads;
 pub mod request;
 pub mod source;
+pub mod spotify;
 pub mod surface;
 pub mod web;
 pub mod zones;

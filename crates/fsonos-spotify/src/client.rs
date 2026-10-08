@@ -564,9 +564,16 @@ pub struct Album {
     #[serde(default)]
     pub release_date: Option<String>,
     #[serde(default)]
+    pub images: Vec<AlbumImage>,
+    #[serde(default)]
     pub total_tracks: u32,
     #[serde(default)]
     pub tracks: Option<Paging<SimplifiedTrack>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AlbumImage {
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -646,6 +653,8 @@ pub struct SimplifiedAlbum {
     pub album_type: Option<String>,
     #[serde(default)]
     pub release_date: Option<String>,
+    #[serde(default)]
+    pub images: Vec<AlbumImage>,
 }
 
 impl SavedAlbum {

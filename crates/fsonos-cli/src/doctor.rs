@@ -248,6 +248,8 @@ mod tests {
                 mcp_http: Some("127.0.0.1:0".parse().unwrap()),
                 spotify_client_id: None,
                 spotify_redirect_uri: String::new(),
+                spotify_accounts_url: None,
+                spotify_api_url: None,
                 events_port: 0,
                 allow_unsafe_bind: false,
                 tailscale: crate::config::TailscaleMode::Auto,

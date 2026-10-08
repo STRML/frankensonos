@@ -8,7 +8,8 @@ speakers stay on the LAN and are never fronted.
 > **Status.** `fsonos serve` runs the HTTP API and the MCP server (streamable
 > HTTP at `/mcp`) over the house policy, and keeps a live model of the
 > speakers from their GENA events, verified end to end against the built-in
-> simulator. Not yet: the DJ. Items marked *(planned)* do not exist yet.
+> simulator. Spotify sign-in and background sync populate the cache the DJ
+> reads on each start.
 
 ## 1. Shape of the deployment
 
@@ -66,7 +67,9 @@ variables. The environment form is what launchd uses.
 | Data directory | `FSONOS_DATA_DIR` | `~/Library/Application Support/fsonos` | Store DB and Spotify token cache. |
 | Direct-seed list | `FSONOS_SEEDS` | unset | Optional file of player addresses for flaky-SSDP networks; every IP address in it is tried (e.g. TOML `players = ["192.0.2.10"]`, or one per line). Every command also takes `--seed <ip>`. Keep the file under `local/` or outside the repo. |
 | Routes file | `FSONOS_ROUTES` | unset | Only for `fsonos sim`: maps the virtual players' advertised addresses to the loopback sockets that serve them, plus the simulator's SSDP target. `fsonos sim` writes it; real players need none. While it is set, `fsonos` reaches nothing the file does not name (other addresses and multicast are refused). |
-| Spotify client id | `FSONOS_SPOTIFY_CLIENT_ID` | unset | Needed only for the DJ (see §5). |
+| Spotify client id | `FSONOS_SPOTIFY_CLIENT_ID` | unset | Needed for Spotify sign-in, library browsing and the DJ (see §5). |
+| Spotify accounts base | `FSONOS_SPOTIFY_ACCOUNTS_URL` | unset | Tests and fakes only; overrides the accounts base, including authorization and token exchange. |
+| Spotify API base | `FSONOS_SPOTIFY_API_URL` | unset | Tests and fakes only; overrides the Web API base, including `/v1`. |
 | Spotify redirect URI | `FSONOS_SPOTIFY_REDIRECT_URI` | `http://127.0.0.1:8099/auth/spotify/callback` | Must match the URI registered for your Spotify app. |
 | Log filter | `RUST_LOG` | `info` | `tracing` EnvFilter syntax. Logs go to stderr. |
 
@@ -296,21 +299,67 @@ same URL, typically as
 Plain HTTP clients use the API directly, e.g.
 `curl https://<mac>.<tailnet>.ts.net/zones`.
 
-### Spotify sign-in (one time, for the DJ) *(planned, `c-auth`)*
+### Spotify sign-in (one time, for browsing and the DJ)
 
-The OAuth redirect URI is loopback, `http://127.0.0.1:8099/auth/spotify/callback`.
-Register exactly that URI for your app in the Spotify developer dashboard.
-Spotify accepts plain `http` only for a loopback IP literal, not `localhost`.
-
-Complete the sign-in in a browser on the Mac. From another machine, tunnel the
-port first:
-
-```bash
-ssh -L 8099:127.0.0.1:8099 <mac>
+```text
+local browser → SSH tunnel → daemon login → Spotify consent
+                                      callback → private token cache
+app or curl → POST /spotify/sync → cached library → browse and DJ
 ```
 
-Then open the authorize URL locally. The refresh token is cached under
-`FSONOS_DATA_DIR`, never in the repo.
+1. Create an app in the Spotify developer dashboard and copy its client id.
+2. Register `http://127.0.0.1:8099/auth/spotify/callback` as its redirect URI.
+3. Set `FSONOS_SPOTIFY_CLIENT_ID` in the daemon's environment.
+4. Start the daemon with the loopback HTTP listener on port 8099.
+5. Open an SSH tunnel from your browser's machine:
+
+   ```bash
+   ssh -L 8099:127.0.0.1:8099 <daemon-host>
+   ```
+
+   The forwarding form is `ssh -L 8099:<daemon-host>:8099 <ssh-host>`.
+   Use `127.0.0.1` as the destination when SSH terminates on the daemon host,
+   so the daemon identifies the forwarded connection as loopback.
+
+6. Open `http://127.0.0.1:8099/auth/spotify/login` in the local browser.
+7. Approve Spotify's read-only library permission.
+8. Start the library sync:
+
+   ```bash
+   curl -X POST -H 'Content-Type: application/json' \
+     http://127.0.0.1:8099/spotify/sync
+   ```
+
+9. Poll `http://127.0.0.1:8099/spotify/status` until `sync.running` is false.
+
+The callback says "Signed in. You can close this tab." The pending sign-in
+expires after ten minutes and is single use. Spotify accepts plain HTTP for
+loopback IP literals, including `127.0.0.1`, rather than `localhost`. If you
+change `FSONOS_SPOTIFY_REDIRECT_URI`, register that exact URI and tunnel its port.
+Tokens stay in `FSONOS_DATA_DIR/auth/spotify-token.json`, written owner-only.
+Artwork URLs are cached as metadata; the daemon does not fetch the images.
+
+LAN and direct tailnet callers are `unknown`. Their default policy allows
+reads; `spotify_sync` requires an explicit allow rule. If `policy.toml` already
+has `[clients.unknown] allow`, include all of the new browsing operations you
+want clients to call, preserving its existing operation ids:
+
+```toml
+[clients.unknown]
+allow = ["spotify_status", "spotify_sync", "list_spotify_albums",
+         "list_spotify_album_tracks", "list_spotify_tracks"]
+```
+
+Restart the daemon after changing its policy or environment. The login and
+callback operations are `spotify_login` and `spotify_callback`; they always
+require a loopback caller, even when a policy allow list includes them.
+
+`sync.done` and `sync.total` count received library entries (saved albums,
+liked tracks, and additional album tracks). The total grows as pages reveal
+more work. A 429 keeps the worker running and reports `sync.error` with
+`retryable:true` and `retry_at` in Unix seconds while honoring `Retry-After`.
+A revoked refresh token sets `reauthorize:true`; sign in again before syncing.
+`library.tracks` counts liked tracks, matching `/spotify/tracks`.
 
 ## 6. Verify and troubleshoot
 

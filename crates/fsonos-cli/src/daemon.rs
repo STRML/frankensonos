@@ -200,12 +200,33 @@ pub fn run(global: &GlobalArgs, args: &ServeArgs) -> anyhow::Result<()> {
         }
     }
     let data_dir = data_dir(global)?;
+    let mut endpoints = fsonos_spotify::client::Endpoints::default();
+    if let Some(accounts) = &args.spotify_accounts_url {
+        endpoints.token = format!("{}/api/token", accounts.trim_end_matches('/'));
+    }
+    if let Some(api) = &args.spotify_api_url {
+        endpoints.api = api.trim_end_matches('/').to_string();
+    }
+    let spotify = fsonos_api::spotify::Spotify::new(
+        args.spotify_client_id
+            .as_ref()
+            .filter(|id| !id.trim().is_empty())
+            .map(|id| fsonos_spotify::client::SpotifyConfig {
+                client_id: id.clone(),
+                redirect_uri: args.spotify_redirect_uri.clone(),
+            }),
+        &data_dir,
+        endpoints,
+        args.spotify_accounts_url.clone(),
+    )?;
     let checks = args.clone();
     let (surface, live) = live_surface(global, args.events_port, policy(&data_dir)?)?;
     let surface = Arc::new(
-        with_action_log(surface, &data_dir, "serve").with_doctor_checks(Box::new(move |runner| {
-            crate::doctor::register(runner, &checks);
-        })),
+        with_action_log(surface, &data_dir, "serve")
+            .with_spotify(spotify)
+            .with_doctor_checks(Box::new(move |runner| {
+                crate::doctor::register(runner, &checks);
+            })),
     );
     // The live model's playback keeps each DJ queue topped up.
     fsonos_api::surface::follow(&surface);

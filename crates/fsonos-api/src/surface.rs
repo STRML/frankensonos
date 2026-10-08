@@ -77,15 +77,18 @@ pub struct Surface {
     events: Option<Arc<EventBus>>,
     /// Until when reads survey directly (set by a regroup).
     settle_until: Mutex<Option<Instant>>,
+    pub(crate) spotify: Option<Arc<crate::spotify::Spotify>>,
 }
 
 /// Doctor checks a surface adds to the core's (the daemon's bind and health
 /// checks, say); registered on each run.
 pub type DoctorChecks = Box<dyn Fn(&mut Runner) + Send + Sync>;
 
+pub(crate) type SharedStore = Arc<Mutex<Box<dyn Store + Send>>>;
+
 /// Where a surface logs its actions, and its name in the log.
 struct ActionLog {
-    store: Mutex<Box<dyn Store + Send>>,
+    store: SharedStore,
     surface: String,
 }
 
@@ -110,7 +113,19 @@ impl Surface {
             live: None,
             events: None,
             settle_until: Mutex::new(None),
+            spotify: None,
         }
+    }
+
+    /// Share Spotify sign-in and sync across every HTTP listener.
+    #[must_use]
+    pub fn with_spotify(mut self, spotify: Arc<crate::spotify::Spotify>) -> Self {
+        self.spotify = Some(spotify);
+        self
+    }
+
+    pub(crate) fn spotify_store(&self) -> Option<SharedStore> {
+        self.log.as_ref().map(|log| Arc::clone(&log.store))
     }
 
     /// Read the households and playback from `live` (the daemon's model,
@@ -236,7 +251,7 @@ impl Surface {
     #[must_use]
     pub fn with_action_log(mut self, store: Box<dyn Store + Send>, surface: &str) -> Self {
         self.log = Some(ActionLog {
-            store: Mutex::new(store),
+            store: Arc::new(Mutex::new(store)),
             surface: surface.to_string(),
         });
         self
@@ -286,7 +301,7 @@ impl Surface {
         }
     }
 
-    fn guard<'a>(&'a self, client: &'a Client) -> Guard<'a> {
+    pub(crate) fn guard<'a>(&'a self, client: &'a Client) -> Guard<'a> {
         Guard {
             policy: &self.policy,
             client,
@@ -721,7 +736,7 @@ impl Surface {
     }
 
     /// Run `f` on the store, if the surface keeps one (with its action log).
-    fn with_store<R>(
+    pub(crate) fn with_store<R>(
         &self,
         f: impl FnOnce(&mut dyn Store) -> Result<R, StoreError>,
     ) -> Result<Option<R>, Failure> {

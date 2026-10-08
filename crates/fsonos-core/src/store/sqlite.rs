@@ -9,8 +9,8 @@
 
 use super::{
     Action, ActionFilter, AlbumTrack, AuthEntry, CachedAlbum, CachedPlayer, DjSession, Feedback,
-    FeedbackKey, LibraryEntry, LibraryOrigin, LoggedAction, PlayRecord, Store, StoreError,
-    StoredScene, StoredSchedule,
+    FeedbackKey, LibraryEntry, LibraryOrigin, LoggedAction, PlayRecord, SpotifyCache, Store,
+    StoreError, StoredScene, StoredSchedule,
 };
 use fsonos_proto::didl::SpotifyRenderParams;
 use fsonos_types::{Generation, Player, PlayerId, Track, ZoneGroup};
@@ -118,6 +118,11 @@ const MIGRATIONS: &[Migration] = &[
             creator TEXT NOT NULL, enabled INTEGER NOT NULL, created INTEGER NOT NULL,
             last_fired INTEGER);
     ",
+    },
+    Migration {
+        version: 7,
+        name: "Spotify browse metadata and sync membership",
+        sql: "CREATE TABLE spotify_cache (id INTEGER PRIMARY KEY, data TEXT NOT NULL);",
     },
 ];
 
@@ -513,6 +518,23 @@ impl Store for SqliteStore {
             })
         })
         .collect()
+    }
+
+    fn spotify_cache(&self) -> Result<SpotifyCache, StoreError> {
+        self.query("SELECT data FROM spotify_cache WHERE id = 1", &[])?
+            .first()
+            .map(|row| serde_json::from_str(&text(row, 0)?).map_err(backend))
+            .transpose()
+            .map(Option::unwrap_or_default)
+    }
+
+    fn save_spotify_cache(&mut self, cache: &SpotifyCache) -> Result<(), StoreError> {
+        let data = serde_json::to_string(cache).map_err(backend)?;
+        self.execute(
+            "INSERT OR REPLACE INTO spotify_cache (id, data) VALUES (1, ?1)",
+            &[data.into()],
+        )
+        .map(drop)
     }
 
     fn save_render_params(
@@ -1030,7 +1052,7 @@ mod tests {
         v1.close().unwrap();
 
         let store = SqliteStore::open(Path::new(&path)).unwrap();
-        assert_eq!(store.schema_versions().unwrap(), [1, 2, 3, 4, 5, 6]);
+        assert_eq!(store.schema_versions().unwrap(), [1, 2, 3, 4, 5, 6, 7]);
         let lib = store.library().unwrap();
         assert_eq!(lib.len(), 1);
         assert_eq!(lib[0].track.source_uri, "spotify:track:old");
@@ -1068,7 +1090,7 @@ mod tests {
         v2.close().unwrap();
 
         let mut store = SqliteStore::open(Path::new(&path)).unwrap();
-        assert_eq!(store.schema_versions().unwrap(), [1, 2, 3, 4, 5, 6]);
+        assert_eq!(store.schema_versions().unwrap(), [1, 2, 3, 4, 5, 6, 7]);
         let lib = store.library().unwrap();
         assert_eq!(lib.len(), 1);
         assert_eq!(lib[0].origin, LibraryOrigin::LikedTrack);

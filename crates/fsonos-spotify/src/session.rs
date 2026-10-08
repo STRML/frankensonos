@@ -38,6 +38,15 @@ pub struct PendingAuthorization {
 }
 
 impl PendingAuthorization {
+    /// Start a flow without reading the token cache or making a request.
+    pub fn begin(config: &SpotifyConfig) -> Result<Self, SpotifyError> {
+        config.validate()?;
+        let pkce = Pkce::generate()?;
+        let state = random_state()?;
+        let url = config.authorize_url(&pkce, &state);
+        Ok(Self { url, pkce, state })
+    }
+
     /// The Spotify consent page for `user-library-read`.
     #[must_use]
     pub fn url(&self) -> &str {
@@ -114,10 +123,7 @@ impl Session {
 
     /// Start the Authorization Code + PKCE flow.
     pub fn begin_authorization(&self) -> Result<PendingAuthorization, SpotifyError> {
-        let pkce = Pkce::generate()?;
-        let state = random_state()?;
-        let url = self.config.authorize_url(&pkce, &state);
-        Ok(PendingAuthorization { url, pkce, state })
+        PendingAuthorization::begin(&self.config)
     }
 
     /// Finish the flow with the redirect the owner's browser landed on (a
@@ -159,6 +165,16 @@ impl Session {
     /// and retries once; a 429 waits out `Retry-After` (a few times); any
     /// other failure maps to [`SpotifyError::Api`].
     pub async fn get(&mut self, cx: &Cx, url: &str) -> Result<Vec<u8>, SpotifyError> {
+        self.get_observed(cx, url, |_| {}).await
+    }
+
+    /// Read a page while reporting each rate-limit wait to the daemon.
+    pub async fn get_observed(
+        &mut self,
+        cx: &Cx,
+        url: &str,
+        mut rate_limited: impl FnMut(u64),
+    ) -> Result<Vec<u8>, SpotifyError> {
         if !self.endpoints.is_api_url(url) {
             return Err(SpotifyError::Config(format!(
                 "refusing to send the Spotify token outside the Web API: {url}"
@@ -183,9 +199,13 @@ impl Session {
                     refreshed = true;
                     self.refresh(cx).await?;
                 }
-                429 if waits < MAX_RATE_LIMIT_WAITS => {
-                    waits += 1;
+                429 => {
                     let secs = retry_after_secs(response.header_value("Retry-After"));
+                    rate_limited(secs);
+                    if waits >= MAX_RATE_LIMIT_WAITS {
+                        return Err(api_error(429, &response.body));
+                    }
+                    waits += 1;
                     sleep(wall_now(), Duration::from_secs(secs)).await;
                 }
                 status => return Err(api_error(status, &response.body)),
