@@ -64,6 +64,10 @@ struct AlbumArtworkView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(LinearGradient(colors: [.clear, .black.opacity(0.36)], startPoint: .top, endPoint: .bottom))
                 }
+                if let url = track.artURL {
+                    AsyncImage(url: url) { image in image.resizable().scaledToFill() } placeholder: { Color.clear }
+                        .frame(width: geometry.size.width, height: geometry.size.height).clipped()
+                }
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))

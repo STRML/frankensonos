@@ -32,11 +32,14 @@ struct NowPlayingView: View {
                                 Text("\(zone.track.artist) · \(zone.track.album)").s1Font(13).foregroundStyle(.white.opacity(0.65)).lineLimit(2)
                             }
                             .frame(maxWidth: .infinity).padding(.horizontal, 16)
-                            scrubber(zone).padding(.top, 20)
+                            if zone.track.duration > 0 { scrubber(zone).padding(.top, 20) }
+                            else { Text("Live").s1Font(12).foregroundStyle(.white.opacity(0.65)).padding(.top, 20) }
                             transport(zone).padding(.top, 8)
                             HStack(spacing: 12) {
                                 Image(systemName: "speaker.fill").font(.system(size: 13))
-                                ThinSlider(value: Binding(get: { store.selectedZone.volume }, set: { store.setVolume($0, for: store.selectedZoneID) }), label: "Group volume", thumbSize: 12)
+                                ThinSlider(value: Binding(get: { store.selectedZone.volume }, set: { store.setVolume($0, for: store.selectedZoneID) }), label: "Group volume", thumbSize: 12, onEditingChanged: { editing in
+                                    if editing { store.beginZoneVolume(zone.id) } else { store.finishZoneVolume(zone.id) }
+                                }).disabled(store.isOffline(zone))
                                 Image(systemName: "speaker.wave.3.fill").font(.system(size: 16))
                             }
                             .padding(.horizontal, 24).frame(height: 44).padding(.top, 10)
@@ -53,7 +56,7 @@ struct NowPlayingView: View {
     }
     private func scrubber(_ zone: AudioZone) -> some View {
         VStack(spacing: 5) {
-            ThinSlider(value: Binding(get: { store.elapsed / zone.track.duration }, set: { store.elapsed = $0 * zone.track.duration }), label: "Playback position", thumbSize: 8)
+            ThinSlider(value: Binding(get: { store.elapsed / zone.track.duration }, set: { store.elapsed = $0 * zone.track.duration }), label: "Playback position", thumbSize: 8).allowsHitTesting(!store.isLive).accessibilityHidden(store.isLive)
             HStack {
                 Text(time(store.elapsed))
                 Spacer()
@@ -76,7 +79,7 @@ struct NowPlayingView: View {
                 Image(systemName: "forward.end.fill").font(.system(size: 28)).frame(width: 44, height: 56)
             }.accessibilityLabel("Next track")
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain).disabled(store.isOffline(zone))
     }
     private func bottomControls(_ zone: AudioZone) -> some View {
         HStack(spacing: 12) {

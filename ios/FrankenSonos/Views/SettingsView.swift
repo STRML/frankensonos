@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @EnvironmentObject private var store: MockZoneStore
+    @State private var daemonURL = DaemonSettings.urlString
+    @State private var invalidURL = false
     @State private var detail: String?
     private let sections: [(String, [(String, String, String)])] = [
         ("System", [("house", "My System", "9 speakers"), ("slider.horizontal.3", "Room Settings", ""), ("alarm", "Alarms", "None set")]),
@@ -8,11 +11,35 @@ struct SettingsView: View {
         ("Account", [("person.crop.circle", "Your Account", "Demo account")]),
         ("Help", [("questionmark.circle", "Help & Tips", ""), ("info.circle", "About My System", "FrankenSonos")])
     ]
+    private var daemonSettings: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("DAEMON").s1Font(11, weight: .semibold).foregroundStyle(.secondary)
+            TextField("Daemon URL", text: $daemonURL).textFieldStyle(.plain).s1Font(14)
+                .onSubmit(saveURL).accessibilityLabel("Daemon URL")
+                #if os(iOS)
+                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                #endif
+            HStack {
+                Text("Connection").s1Font(14)
+                Spacer()
+                Text(store.connectionStatus.rawValue.capitalized).s1Font(12).foregroundStyle(.secondary)
+            }
+            HStack {
+                Text(URL(string: store.daemonURLString)?.host ?? store.daemonURLString).s1Font(11).foregroundStyle(.secondary)
+                Spacer()
+                Button("Connect", action: saveURL).s1Font(13, weight: .semibold)
+            }
+            if invalidURL { Text("Enter an http:// or https:// daemon URL.").s1Font(12).foregroundStyle(.red) }
+        }
+        .padding(16).background(.white)
+    }
+    private func saveURL() { invalidURL = !store.changeDaemonURL(daemonURL) }
     var body: some View {
         GeometryReader { geometry in
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(sections, id: \.0) { section in
+                    if store.isLive { daemonSettings }
+                    ForEach(store.isLive ? [] : sections, id: \.0) { section in
                         Text(section.0.uppercased()).s1Font(11, weight: .semibold)
                             .foregroundStyle(Color(white: 0.38))
                             .padding(.horizontal, 16).padding(.top, 22).padding(.bottom, 8)
@@ -35,7 +62,7 @@ struct SettingsView: View {
                             }
                         }
                     }
-                    Text("FrankenSonos · Mock remote").s1Font(11).foregroundStyle(Color(white: 0.38))
+                    Text(store.isLive ? "FrankenSonos · Daemon remote" : "FrankenSonos · Mock remote").s1Font(11).foregroundStyle(Color(white: 0.38))
                         .frame(maxWidth: .infinity).padding(.vertical, 24)
                 }
                 .frame(width: geometry.size.width, alignment: .leading)

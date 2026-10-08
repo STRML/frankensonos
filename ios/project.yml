@@ -7,13 +7,25 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     TARGETED_DEVICE_FAMILY: "1"
-    GENERATE_INFOPLIST_FILE: YES
+    GENERATE_INFOPLIST_FILE: NO
 targets:
   FrankenSonos:
     type: application
     platform: iOS
     sources:
       - path: FrankenSonos
+    info:
+      path: Generated/Info.plist
+      properties:
+        CFBundleDisplayName: FrankenSonos
+        UILaunchScreen: {}
+        NSLocalNetworkUsageDescription: Connect to your FrankenSonos daemon on your local network.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            ts.net:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.frankensonos.remote

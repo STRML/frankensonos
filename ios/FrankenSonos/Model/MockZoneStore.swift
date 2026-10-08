@@ -4,7 +4,9 @@ import Combine
 @MainActor
 final class MockZoneStore: ZoneStore {
     @Published private(set) var zones: [AudioZone]
-    @Published var selectedZoneID: UUID
+    @Published var selectedZoneID: UUID {
+        didSet { if liveStore?.selectedZoneID != selectedZoneID { liveStore?.selectedZoneID = selectedZoneID } }
+    }
     @Published var selectedTab: RemoteTab = .rooms
     @Published var isPlayerPresented = false
     @Published var isRoomsSheetPresented = false
@@ -18,9 +20,77 @@ final class MockZoneStore: ZoneStore {
     @Published var groupZone: AudioZone?
     @Published var groupEditingRooms: Set<String> = []
     @Published private(set) var roomVolumes: [String: Double] = [:]
-    let rooms = ["Kitchen", "Bedroom", "Living Room", "Dining Room", "Office", "Patio", "Bathroom", "Garage", "Movie Room"]
-    let tracks = Track.library
+    @Published private(set) var rooms = ["Kitchen", "Bedroom", "Living Room", "Dining Room", "Office", "Patio", "Bathroom", "Garage", "Movie Room"]
+    @Published private(set) var tracks = Track.library
     private var roomIDs: [String: UUID] = [:]
+    private var liveStore: LiveZoneStore?
+    private var liveUpdates: AnyCancellable?
+    @Published private(set) var connectionStatus: ZoneConnectionStatus = .live
+    @Published var commandError: String? {
+        didSet { if liveStore?.commandError != commandError { liveStore?.commandError = commandError } }
+    }
+    @Published private(set) var commandSuggestions: [String] = []
+    @Published private(set) var offlineRooms: Set<String> = []
+    @Published private(set) var queueLengths: [String: Int] = [:]
+    var isLive: Bool { liveStore != nil }
+    var daemonURLString: String { DaemonSettings.urlString }
+
+    init(live: LiveZoneStore) {
+        zones = []
+        selectedZoneID = live.selectedZoneID
+        rooms = []
+        tracks = []
+        elapsed = 0
+        attach(live)
+    }
+
+    private func attach(_ live: LiveZoneStore) {
+        liveStore?.setActive(false)
+        liveUpdates?.cancel()
+        liveStore = live
+        copyLiveState()
+        liveUpdates = live.objectWillChange.sink { [weak self, weak live] _ in
+            Task { @MainActor in
+                guard let self, self.liveStore === live else { return }
+                self.copyLiveState()
+            }
+        }
+    }
+
+    private func copyLiveState() {
+        guard let liveStore else { return }
+        zones = liveStore.zones
+        selectedZoneID = liveStore.selectedZoneID
+        rooms = liveStore.rooms
+        tracks = liveStore.tracks
+        roomVolumes = liveStore.roomVolumes
+        elapsed = liveStore.elapsed
+        connectionStatus = liveStore.connectionStatus
+        commandError = liveStore.commandError
+        commandSuggestions = liveStore.commandSuggestions
+        offlineRooms = liveStore.offlineRooms
+        queueLengths = liveStore.queueLengths
+    }
+
+    func start() { liveStore?.start() }
+    func retry() { liveStore?.retry() }
+    func setActive(_ active: Bool) { liveStore?.setActive(active) }
+    func beginVolume(room: String) { liveStore?.beginVolume(room: room) }
+    func beginZoneVolume(_ zoneID: UUID) {
+        zones.first(where: { $0.id == zoneID })?.roomNames.forEach { beginVolume(room: $0) }
+    }
+    func finishVolume(room: String) { liveStore?.finishVolume(room: room) }
+    func finishZoneVolume(_ zoneID: UUID) {
+        zones.first(where: { $0.id == zoneID })?.roomNames.forEach { finishVolume(room: $0) }
+    }
+    func isOffline(_ zone: AudioZone) -> Bool { zone.roomNames.contains { offlineRooms.contains($0) } }
+    func changeDaemonURL(_ value: String) -> Bool {
+        guard let url = DaemonSettings.validated(value) else { return false }
+        DaemonSettings.urlString = url.absoluteString
+        attach(LiveZoneStore(baseURL: url))
+        liveStore?.start()
+        return true
+    }
 
     init() {
         let kitchen = UUID()
@@ -35,10 +105,13 @@ final class MockZoneStore: ZoneStore {
         }
     }
 
-    var selectedZone: AudioZone { zones.first(where: { $0.id == selectedZoneID }) ?? zones[0] }
+    var selectedZone: AudioZone {
+        zones.first(where: { $0.id == selectedZoneID }) ?? zones.first ?? AudioZone(id: selectedZoneID, roomNames: [], track: Track.live(title: "No track", artist: "", album: "", key: "empty", duration: 0), isPlaying: false, volume: 0)
+    }
     func zone(for room: String) -> AudioZone { zones.first(where: { $0.roomNames.contains(room) }) ?? selectedZone }
     func model(for room: String) -> String {
-        switch room {
+        if isLive { return offlineRooms.contains(room) ? "Offline" : "Sonos" }
+        return switch room {
         case "Kitchen", "Office": "Sonos Five"
         case "Living Room": "Sonos Play:5"
         case "Patio": "Sonos Move"
@@ -49,34 +122,45 @@ final class MockZoneStore: ZoneStore {
     }
 
     func togglePlayback(for zoneID: UUID) {
+        if let liveStore { liveStore.togglePlayback(for: zoneID); return }
         guard let index = zones.firstIndex(where: { $0.id == zoneID }) else { return }
         zones[index].isPlaying.toggle()
     }
-    func pauseAll() { zones.indices.forEach { zones[$0].isPlaying = false } }
+    func pauseAll() {
+        if let liveStore { liveStore.pauseAll(); return }
+        zones.indices.forEach { zones[$0].isPlaying = false }
+    }
     func setSleepTimer(_ minutes: Int?, now: Date = Date()) {
         sleepMinutes = minutes
         sleepDeadline = minutes.map { now.addingTimeInterval(Double($0 * 60)) }
         sleepZoneID = minutes == nil ? nil : selectedZoneID
     }
     func tick(now: Date = Date()) {
-        if selectedZone.isPlaying { elapsed = min(selectedZone.track.duration, elapsed + 1) }
+        if let liveStore { liveStore.tick(now: now) }
+        else if selectedZone.isPlaying { elapsed = min(selectedZone.track.duration, elapsed + 1) }
         guard let sleepDeadline, now >= sleepDeadline else { return }
-        if let index = zones.firstIndex(where: { $0.id == sleepZoneID }) { zones[index].isPlaying = false }
+        if let index = zones.firstIndex(where: { $0.id == sleepZoneID }), zones[index].isPlaying {
+            if let liveStore { liveStore.togglePlayback(for: zones[index].id) }
+            else { zones[index].isPlaying = false }
+        }
         setSleepTimer(nil)
     }
     func setVolume(_ value: Double, for zoneID: UUID) {
+        if let liveStore { liveStore.setVolume(value, for: zoneID); return }
         guard let index = zones.firstIndex(where: { $0.id == zoneID }) else { return }
         let level = min(1, max(0, value))
         zones[index].volume = level
         zones[index].roomNames.forEach { roomVolumes[$0] = level }
     }
     func setRoomVolume(_ value: Double, room: String) {
+        if let liveStore { liveStore.setRoomVolume(value, room: room); return }
         roomVolumes[room] = min(1, max(0, value))
         guard let index = zones.firstIndex(where: { $0.roomNames.contains(room) }) else { return }
         zones[index].volume = zones[index].roomNames.map { roomVolumes[$0] ?? 0 }.reduce(0, +) / Double(zones[index].roomNames.count)
     }
 
     func setGroupedRooms(_ roomNames: [String], basedOn zoneID: UUID) {
+        if let liveStore { liveStore.setGroupedRooms(roomNames, basedOn: zoneID); return }
         guard let source = zones.first(where: { $0.id == zoneID }) else { return }
         let selected = rooms.filter { roomNames.contains($0) }
         guard !selected.isEmpty else { return }
@@ -107,8 +191,16 @@ final class MockZoneStore: ZoneStore {
         guard draggedID != targetID, let dragged = zones.first(where: { $0.id == draggedID }), let target = zones.first(where: { $0.id == targetID }) else { return }
         setGroupedRooms(target.roomNames + dragged.roomNames, basedOn: targetID)
     }
-    func groupAll() { setGroupedRooms(rooms, basedOn: selectedZoneID) }
+    func groupAll() {
+        if let liveStore { liveStore.groupAll(); return }
+        setGroupedRooms(rooms, basedOn: selectedZoneID)
+    }
     func ungroupAll() {
+        if let liveStore {
+            liveStore.ungroupAll()
+            groupZone = nil
+            return
+        }
         let old = zones
         let selectedRoom = selectedZone.roomNames[0]
         zones = rooms.map { room in
@@ -128,12 +220,14 @@ final class MockZoneStore: ZoneStore {
         self.groupZone = nil
     }
     func selectTrack(_ track: Track, in zoneID: UUID) {
+        if let liveStore { liveStore.selectTrack(track, in: zoneID); return }
         guard let index = zones.firstIndex(where: { $0.id == zoneID }) else { return }
         zones[index].track = track
         zones[index].isPlaying = true
         elapsed = 0
     }
     func advanceTrack(in zoneID: UUID, direction: Int) {
+        if let liveStore { liveStore.advanceTrack(in: zoneID, direction: direction); return }
         guard let zone = zones.first(where: { $0.id == zoneID }), let index = tracks.firstIndex(of: zone.track) else { return }
         selectTrack(tracks[(index + direction + tracks.count) % tracks.count], in: zoneID)
     }

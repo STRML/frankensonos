@@ -59,9 +59,11 @@ private struct DenseRoomRow: View {
                     Spacer(minLength: 0)
                     if zone.isPlaying { EqualizerGlyph() }
                 }
-                Text("\(zone.track.title) - \(zone.track.artist)").s1Font(11).foregroundStyle(S1Palette.secondary(scheme)).lineLimit(1)
+                Text(store.isOffline(zone) ? "Offline" : "\(zone.track.title) - \(zone.track.artist)").s1Font(11).foregroundStyle(S1Palette.secondary(scheme)).lineLimit(1)
                 if zone.isPlaying {
-                    ThinSlider(value: Binding(get: { store.zones.first(where: { $0.id == zone.id })?.volume ?? 0 }, set: { store.setVolume($0, for: zone.id) }), label: "\(zone.displayName) volume", thumbSize: 6).frame(height: 10)
+                    ThinSlider(value: Binding(get: { store.zones.first(where: { $0.id == zone.id })?.volume ?? 0 }, set: { store.setVolume($0, for: zone.id) }), label: "\(zone.displayName) volume", thumbSize: 6, onEditingChanged: { editing in
+                        if editing { store.beginZoneVolume(zone.id) } else { store.finishZoneVolume(zone.id) }
+                    }).frame(height: 10)
                 }
             }
 
@@ -71,6 +73,7 @@ private struct DenseRoomRow: View {
             .buttonStyle(.plain)
             .accessibilityLabel("\(zone.isPlaying ? "Pause" : "Play") \(zone.displayName)")
         }
+        .disabled(store.isOffline(zone)).opacity(store.isOffline(zone) ? 0.45 : 1)
         .padding(.horizontal, 8)
         .frame(minHeight: rowHeight)
         .background(Color.primary.opacity(targeted ? 0.12 : (selected ? 0.025 : 0)))
@@ -85,7 +88,7 @@ private struct DenseRoomRow: View {
         .onLongPressGesture { store.beginGroupEditing(zone) }
         .draggable(zone.id.uuidString)
         .dropDestination(for: String.self) { items, _ in
-            guard let text = items.first, let id = UUID(uuidString: text), id != zone.id, store.zones.contains(where: { $0.id == id }) else { return false }
+            guard !store.isOffline(zone), let text = items.first, let id = UUID(uuidString: text), id != zone.id, store.zones.contains(where: { $0.id == id }) else { return false }
             store.group(id, onto: zone.id)
             #if os(iOS)
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -94,5 +97,6 @@ private struct DenseRoomRow: View {
         } isTargeted: { targeted = $0 }
         .accessibilityAction(named: "Select room") { store.selectedZoneID = zone.id }
         .accessibilityAction(named: "Edit group") { store.beginGroupEditing(zone) }
+        .allowsHitTesting(!store.isOffline(zone))
     }
 }

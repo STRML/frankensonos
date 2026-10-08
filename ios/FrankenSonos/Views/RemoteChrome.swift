@@ -46,6 +46,8 @@ struct ThinSlider: View {
     @Binding var value: Double
     var label: String
     var thumbSize: CGFloat = 10
+    var onEditingChanged: (Bool) -> Void = { _ in }
+    @State private var isDragging = false
     var body: some View {
         GeometryReader { geometry in
             let width = max(1, geometry.size.width - thumbSize)
@@ -57,15 +59,20 @@ struct ThinSlider: View {
             }
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0).onChanged { value = min(1, max(0, ($0.location.x - thumbSize / 2) / width)) })
+            .gesture(DragGesture(minimumDistance: 0).onChanged {
+                if !isDragging { isDragging = true; onEditingChanged(true) }
+                value = min(1, max(0, ($0.location.x - thumbSize / 2) / width))
+            }.onEnded { _ in isDragging = false; onEditingChanged(false) })
         }
         .frame(height: 16)
         .accessibilityElement()
         .accessibilityLabel(label)
         .accessibilityValue("\(Int(value * 100)) percent")
         .accessibilityAdjustableAction { direction in
+            onEditingChanged(true)
             if direction == .increment { value = min(1, value + 0.05) }
             if direction == .decrement { value = max(0, value - 0.05) }
+            onEditingChanged(false)
         }
     }
 }
@@ -256,6 +263,18 @@ struct RemoteRoot: View {
                 .preferredColorScheme(store.isPlayerPresented ? .dark : .light)
         }
         #endif
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if store.isLive { ConnectionBanner() }
+        }
+        .alert("Didn't go through", isPresented: Binding(get: { store.isLive && store.commandError != nil }, set: { if !$0 { store.commandError = nil } })) {
+            ForEach(store.commandSuggestions, id: \.self) { suggestion in
+                Button(suggestion) {
+                    if let zone = store.zones.first(where: { $0.roomNames.contains(suggestion) }) { store.selectedZoneID = zone.id }
+                    store.commandError = nil
+                }
+            }
+            Button("OK") { store.commandError = nil }
+        } message: { Text(store.commandError ?? "") }
         .scrollIndicators(.hidden)
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { store.tick(now: $0) }
         .safeAreaInset(edge: .bottom, spacing: 0) { Color(white: 0.025).frame(height: 0) }

@@ -21,7 +21,7 @@ struct MiniPlayerBar: View {
             Button { store.togglePlayback(for: zone.id) } label: {
                 Image(systemName: zone.isPlaying ? "pause.fill" : "play.fill").font(.system(size: 18)).frame(width: 44, height: 44)
             }
-            .accessibilityLabel(zone.isPlaying ? "Pause" : "Play")
+            .accessibilityLabel(zone.isPlaying ? "Pause" : "Play").disabled(store.isOffline(zone))
         }
         .buttonStyle(.plain).padding(.horizontal, 16).frame(minHeight: 64)
         .foregroundStyle(.white).background(Color(white: 0.14))

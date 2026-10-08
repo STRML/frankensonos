@@ -1,4 +1,7 @@
+import Foundation
+#if !LIVE_CHECKS
 import SwiftUI
+#endif
 
 struct Track: Identifiable, Hashable {
     let id: Int
@@ -7,9 +10,25 @@ struct Track: Identifiable, Hashable {
     let album: String
     let source: String
     let symbol: String
+    #if !LIVE_CHECKS
     let colors: [Color]
-    var duration: Double { Double(218 + id * 17) }
+    #endif
+    var mediaDuration: Double? = nil
+    var artURL: URL? = nil
+    var favoriteID: String? = nil
+    var household: String? = nil
+    var duration: Double { mediaDuration ?? Double(218 + id * 17) }
 
+    static func live(title: String, artist: String, album: String, key: String, duration: Double = 0, artURL: URL? = nil) -> Track {
+        let id = StableIdentity.number(key)
+        #if LIVE_CHECKS
+        return Track(id: id, title: title, artist: artist, album: album, source: "Sonos Favorites", symbol: "music.note", mediaDuration: max(0, duration), artURL: artURL)
+        #else
+        return Track(id: id, title: title, artist: artist, album: album, source: "Sonos Favorites", symbol: "music.note", colors: [Color(hue: Double(id % 360) / 360, saturation: 0.5, brightness: 0.45), Color(hue: Double((id + 55) % 360) / 360, saturation: 0.6, brightness: 0.8)], mediaDuration: max(0, duration), artURL: artURL)
+        #endif
+    }
+
+    #if !LIVE_CHECKS
     // Fictional records. Every cover is drawn from this palette and seed.
     static let library: [Track] = [
         Track(id: 1, title: "After the Rain", artist: "North Window", album: "Quiet Architecture", source: "Spotify", symbol: "moon", colors: [Color(red: 0.12, green: 0.38, blue: 0.39), Color(red: 0.9, green: 0.49, blue: 0.29)]),
@@ -25,6 +44,7 @@ struct Track: Identifiable, Hashable {
         Track(id: 11, title: "First Light", artist: "Cedar & Stone", album: "Northern Air", source: "Sonos Radio", symbol: "sunrise", colors: [.cyan, .blue]),
         Track(id: 12, title: "Homeward", artist: "Orion Fields", album: "Slow Roads", source: "Line-In", symbol: "mountain.2", colors: [.purple, .orange])
     ]
+    #endif
 }
 
 struct AudioZone: Identifiable {
@@ -34,9 +54,10 @@ struct AudioZone: Identifiable {
     var isPlaying: Bool
     var volume: Double
     var displayName: String { roomNames.joined(separator: " + ") }
-    var shortName: String { roomNames.count > 1 ? "\(roomNames[0]) + \(roomNames.count - 1)" : roomNames[0] }
+    var shortName: String { roomNames.count > 1 ? "\(roomNames[0]) + \(roomNames.count - 1)" : roomNames.first ?? "" }
 }
 
+#if !LIVE_CHECKS
 struct MusicSource: Identifiable, Hashable {
     let name: String
     let symbol: String
@@ -52,3 +73,4 @@ struct MusicSource: Identifiable, Hashable {
         MusicSource(name: "Line-In", symbol: "cable.connector", colors: [Color(red: 0.43, green: 0.39, blue: 0.32)])
     ]
 }
+#endif

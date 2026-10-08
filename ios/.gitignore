@@ -1,5 +1,6 @@
 .build/
 # Generated from project.yml by `xcodegen generate`.
 FrankenSonos.xcodeproj/
+Generated/
 # Regenerate with the renderer described in sketch-report.md.
 sketch-shots/

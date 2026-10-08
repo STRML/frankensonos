@@ -12,7 +12,14 @@ struct BrowseView: View {
                     Spacer()
                 }
                 .padding(.horizontal, 16).frame(height: 40)
-                if let source = store.browseSource {
+                if store.isLive {
+                    Text("Favorites").s1Font(18, weight: .semibold).padding(16)
+                    ForEach(store.tracks) { track in
+                        SongRow(track: track) { store.selectTrack(track, in: store.selectedZoneID); openPlayer() }
+                            .disabled(store.isOffline(store.selectedZone))
+                    }
+                    if store.tracks.isEmpty { Text("No favorites").s1Font(13).foregroundStyle(.secondary).padding(16) }
+                } else if let source = store.browseSource {
                     if source.name == "TV" {
                         VStack(spacing: 16) {
                             Image(systemName: "tv").font(.system(size: 40))

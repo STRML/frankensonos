@@ -116,13 +116,16 @@ struct DeviceVolumeRow: View {
                     Spacer()
                     Text("\(Int((store.roomVolumes[room] ?? 0) * 100))%").s1Font(10).monospacedDigit().foregroundStyle(S1Palette.secondary(scheme))
                 }
-                ThinSlider(value: Binding(get: { store.roomVolumes[room] ?? 0.3 }, set: { store.setRoomVolume($0, room: room) }), label: "\(room) volume", thumbSize: 7).frame(height: 12)
+                ThinSlider(value: Binding(get: { store.roomVolumes[room] ?? 0.3 }, set: { store.setRoomVolume($0, room: room) }), label: "\(room) volume", thumbSize: 7, onEditingChanged: { editing in
+                    if editing { store.beginVolume(room: room) } else { store.finishVolume(room: room) }
+                }).frame(height: 12)
             }
             Button(action: select) {
                 Image(systemName: checked ? "checkmark.square.fill" : "square").font(.system(size: 20, weight: .light)).foregroundStyle(checked ? Color.primary : .secondary).frame(width: 32, height: 44)
             }
             .buttonStyle(.plain).accessibilityLabel("\(editing ? "Include" : "Select") \(room)").accessibilityValue(checked ? "Selected" : "Not selected")
         }
+        .disabled(store.offlineRooms.contains(room)).opacity(store.offlineRooms.contains(room) ? 0.45 : 1)
         .padding(.horizontal, 16).frame(minHeight: rowHeight)
         .overlay(alignment: .bottom) { Rectangle().fill(Color.primary.opacity(0.08)).frame(height: 0.5).padding(.leading, 66) }
     }
@@ -178,7 +181,13 @@ struct PlayerUtilitySheet: View {
             S1TopBar(title: store.isQueuePresented ? "Queue" : "Sleep Timer", trailing: "Done", trailingAction: close)
             ScrollView(.vertical, showsIndicators: false) {
                 if store.isQueuePresented {
-                    ForEach(store.tracks) { track in SongRow(track: track) { store.selectTrack(track, in: store.selectedZoneID); close() } }
+                    if store.isLive {
+                        if let count = store.queueLengths[store.selectedZone.roomNames.first ?? ""] {
+                            Text("\(count) tracks").s1Font(14).padding(24)
+                        } else { Text("Queue count unavailable").s1Font(14).padding(24) }
+                    } else {
+                        ForEach(store.tracks) { track in SongRow(track: track) { store.selectTrack(track, in: store.selectedZoneID); close() } }
+                    }
                 } else {
                     VStack(spacing: 8) {
                         Text("Pause \(store.selectedZone.displayName) after:").s1Font(13).foregroundStyle(S1Palette.secondary(scheme)).padding(.top, 16)

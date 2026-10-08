@@ -9,7 +9,7 @@ struct SearchView: View {
     private let services = ["All", "Spotify", "Music Library", "Sonos Radio"]
     private var results: [Track] {
         store.tracks.filter { track in
-            (service == "All" || service == "Music Library" || track.source == service) &&
+            (store.isLive || service == "All" || service == "Music Library" || track.source == service) &&
             (query.isEmpty || "\(track.title) \(track.artist) \(track.album)".localizedCaseInsensitiveContains(query))
         }
     }
@@ -29,7 +29,7 @@ struct SearchView: View {
             .padding(.horizontal, 16).padding(.top, 16)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(services, id: \.self) { name in
+                    ForEach(store.isLive ? ["Favorites"] : services, id: \.self) { name in
                         Button { service = name } label: {
                             Text(name).s1Font(12, weight: service == name ? .semibold : .regular)
                                 .fixedSize().padding(.horizontal, 12).frame(height: 32)
@@ -44,14 +44,14 @@ struct SearchView: View {
             .padding(.vertical, 12)
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
-                    if query.isEmpty {
+                    if query.isEmpty && !store.isLive {
                         HStack {
                             Text("Recent Searches").s1Font(17, weight: .semibold)
                             Spacer()
                             Button("Clear") { recent = [] }.s1Font(12).buttonStyle(.plain)
                         }
                         .padding(.horizontal, 16).frame(height: 44)
-                        ForEach(recent, id: \.self) { text in
+                        ForEach(store.isLive ? [] : recent, id: \.self) { text in
                             Button { query = text } label: {
                                 HStack(spacing: 12) {
                                     Image(systemName: "clock").font(.system(size: 18, weight: .light)).foregroundStyle(Color(white: 0.38))
@@ -65,7 +65,7 @@ struct SearchView: View {
                             }
                             .buttonStyle(.plain)
                         }
-                        Text("Search your music services").s1Font(17, weight: .semibold)
+                        Text(store.isLive ? "Search your favorites" : "Search your music services").s1Font(17, weight: .semibold)
                             .padding(.horizontal, 16).padding(.top, 26).padding(.bottom, 8)
                     } else {
                         Text("Songs").s1Font(17, weight: .semibold).padding(16)
