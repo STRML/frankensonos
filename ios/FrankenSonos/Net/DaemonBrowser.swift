@@ -56,6 +56,7 @@ final class DaemonBrowser: ObservableObject {
     private func resolved(_ name: String, host: String, port: Int) {
         resolvers[name] = nil
         guard let url = URL(string: "http://\(host):\(port)"), !found.contains(where: { $0.name == name }) else { return }
+        AppLog.shared.add("bonjour", "found \(name) at \(url.absoluteString)")
         found.append(DiscoveredDaemon(name: name, url: url))
         found.sort { $0.name < $1.name }
     }
@@ -83,6 +84,10 @@ final class ServiceResolver: NSObject, NetServiceDelegate {
     }
 
     func cancel() { service.stop() }
+
+    func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
+        AppLog.shared.add("bonjour", "could not resolve \(sender.name): \(errorDict)")
+    }
 
     /// An IPv4 address when the service has one; otherwise its `.local` host name, so a host that publishes only IPv6
     /// link-local addresses is still offered.

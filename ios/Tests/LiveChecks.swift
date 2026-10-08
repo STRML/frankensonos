@@ -56,6 +56,31 @@ final class LiveChecks: XCTestCase {
             // IPv4 when the registering host has one, else its .local name (this Mac publishes only IPv6 link-local).
             try require(hit.url.host.map { !$0.isEmpty } == true, "no host in \(hit.url)")
         }
+        let stubURL = URL(string: env["FSONOS_E2E_STUB_URL"]!)!
+        await check(20, "a refused live stream keeps the app connected and says why") {
+            let stub = LiveZoneStore(baseURL: stubURL)
+            stub.start()
+            defer { stub.setActive(false) }
+            try await wait("bootstrap over HTTP") { stub.connectionStatus == .live }
+            try await wait("reason shown", seconds: 8) { stub.streamNote?.contains("may not use events") == true }
+            // The stream is retried on a backoff. The status must hold steady through those retries.
+            let until = Date().addingTimeInterval(4)
+            while Date() < until {
+                try require(stub.connectionStatus == .live, "refused stream flapped to \(stub.connectionStatus)")
+                try await Task.sleep(for: .milliseconds(50))
+            }
+        }
+        await check(21, "the copied log carries the context and the refusal, and stays bounded") {
+            let report = AppLog.shared.report(header: ["Daemon: \(stubURL.absoluteString)"])
+            try require(report.hasPrefix("FrankenSonos log"), "no title line:\n\(report.prefix(200))")
+            try require(report.contains("Daemon: \(stubURL.absoluteString)"), "header line missing")
+            try require(report.contains("events refused") && report.contains("POLICY_DENIED"), "refusal not logged:\n\(report.suffix(500))")
+            for index in 0..<700 { AppLog.shared.add("test", "line \(index)") }
+            let lines = AppLog.shared.report(header: []).split(separator: "\n")
+            try require(lines.count <= AppLog.limit + 2, "log grew to \(lines.count) lines")
+            try require(lines.last?.hasSuffix("line 699") == true, "newest line missing")
+            try require(!lines.contains { $0.hasSuffix("line 0") }, "oldest line was not dropped")
+        }
         await check(1, "unreachable launch stays empty/offline, then bootstraps") {
             try await control("stop")
             store.start()

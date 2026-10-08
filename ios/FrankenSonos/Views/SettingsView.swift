@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct SettingsView: View {
     @EnvironmentObject private var store: MockZoneStore
@@ -6,6 +9,7 @@ struct SettingsView: View {
     @State private var invalidURL = false
     @State private var detail: String?
     @StateObject private var browser = DaemonBrowser()
+    @State private var copiedLines: Int?
     private let sections: [(String, [(String, String, String)])] = [
         ("System", [("house", "My System", "9 speakers"), ("slider.horizontal.3", "Room Settings", ""), ("alarm", "Alarms", "None set")]),
         ("Services and Voice", [("music.note", "Music Services", "3 services"), ("mic", "Voice Assistants", "Not set up")]),
@@ -58,11 +62,49 @@ struct SettingsView: View {
         }
     }
     private func saveURL() { invalidURL = !store.changeDaemonURL(daemonURL) }
+    /// Puts the app's recent connection log on the clipboard, with enough context to read it cold.
+    private var supportSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("SUPPORT").s1Font(11, weight: .semibold).foregroundStyle(.secondary)
+            Button(action: copyLog) {
+                HStack {
+                    Text(copiedLines.map { "Copied \($0) lines" } ?? "Copy log to clipboard").s1Font(14)
+                    Spacer()
+                    Image(systemName: copiedLines == nil ? "doc.on.doc" : "checkmark").font(.system(size: 14, weight: .light))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Copy log to clipboard")
+        }
+        .padding(16).background(.white).padding(.top, 12)
+    }
+    private func copyLog() {
+        #if canImport(UIKit)
+        let info = Bundle.main.infoDictionary
+        let header = [
+            "App: \(info?["CFBundleShortVersionString"] as? String ?? "?") (\(info?["CFBundleVersion"] as? String ?? "?"))",
+            "iOS: \(UIDevice.current.systemVersion), \(UIDevice.current.model)",
+            "Daemon: \(store.daemonURLString)",
+            "Status: \(store.connectionStatus.rawValue)\(store.streamNote.map { " (\($0))" } ?? "")",
+            "Rooms: \(store.rooms.count)"
+        ]
+        UIPasteboard.general.string = AppLog.shared.report(header: header)
+        copiedLines = AppLog.shared.count
+        Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            copiedLines = nil
+        }
+        #endif
+    }
     var body: some View {
         GeometryReader { geometry in
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
-                    if store.isLive { daemonSettings }
+                    if store.isLive {
+                        daemonSettings
+                        supportSection
+                    }
                     ForEach(store.isLive ? [] : sections, id: \.0) { section in
                         Text(section.0.uppercased()).s1Font(11, weight: .semibold)
                             .foregroundStyle(Color(white: 0.38))

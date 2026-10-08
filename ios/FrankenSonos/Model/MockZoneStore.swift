@@ -26,6 +26,7 @@ final class MockZoneStore: ZoneStore {
     private var liveStore: LiveZoneStore?
     private var liveUpdates: AnyCancellable?
     @Published private(set) var connectionStatus: ZoneConnectionStatus = .live
+    @Published private(set) var streamNote: String?
     @Published var commandError: String? {
         didSet { if liveStore?.commandError != commandError { liveStore?.commandError = commandError } }
     }
@@ -66,6 +67,7 @@ final class MockZoneStore: ZoneStore {
         roomVolumes = liveStore.roomVolumes
         elapsed = liveStore.elapsed
         connectionStatus = liveStore.connectionStatus
+        streamNote = liveStore.streamNote
         commandError = liveStore.commandError
         commandSuggestions = liveStore.commandSuggestions
         offlineRooms = liveStore.offlineRooms

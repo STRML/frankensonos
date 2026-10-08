@@ -10,7 +10,12 @@ final class LiveZoneStore: ZoneStore {
     @Published var rooms: [String] = []
     @Published var tracks: [Track] = []
     @Published var roomVolumes: [String: Double] = [:]
-    @Published var connectionStatus: ZoneConnectionStatus = .offline
+    @Published var connectionStatus: ZoneConnectionStatus = .offline {
+        didSet { if oldValue != connectionStatus { AppLog.shared.add("status", "\(oldValue.rawValue) -> \(connectionStatus.rawValue)") } }
+    }
+    /// Set while the daemon answers over HTTP but refuses the live stream, so the app is current only as of the last
+    /// refresh. Cleared when the stream opens.
+    @Published var streamNote: String?
     @Published var commandError: String?
     @Published var commandSuggestions: [String] = []
     @Published var offlineRooms: Set<String> = []
@@ -76,7 +81,8 @@ final class LiveZoneStore: ZoneStore {
         var attempt = 0
         while !Task.isCancelled && active {
             do {
-                if hasConnected { connectionStatus = .refreshing }
+                // A retry while the app is already showing live data should not flash "Refreshing".
+                if hasConnected && connectionStatus != .live { connectionStatus = .refreshing }
                 try await refreshAll()
                 try Task.checkCancellation()
                 // With nothing missed since the resume cursor, the daemon sends no headers until its next
@@ -86,13 +92,23 @@ final class LiveZoneStore: ZoneStore {
                 try await client.events(lastEventID: lastEventID, opened: {
                     self.hasConnected = true
                     self.streamOpen = true
+                    self.streamNote = nil
                     self.connectionStatus = .live
                     attempt = 0
                 }, receive: { event in await self.apply(event) })
             } catch {
                 if Task.isCancelled || !active { return }
                 streamOpen = false
-                connectionStatus = hasConnected ? .reconnecting : .offline
+                if let failure = error as? DaemonFailure, (400..<500).contains(failure.status) {
+                    // The daemon is reachable and said no (a policy, usually). HTTP works, so the app is not
+                    // disconnected: say why updates are not live and keep refreshing on the retry cadence.
+                    streamNote = "Live updates are off: \(failure.detail)"
+                    connectionStatus = .live
+                } else {
+                    streamNote = nil
+                    AppLog.shared.add("stream", "events ended: \(error.localizedDescription)")
+                    connectionStatus = hasConnected ? .reconnecting : .offline
+                }
                 // The ring is volatile. A confirmed daemon outage needs a fresh cursor.
                 do { try await client.health() } catch { lastEventID = nil }
                 let delay = DaemonClient.backoff[min(attempt, DaemonClient.backoff.count - 1)]

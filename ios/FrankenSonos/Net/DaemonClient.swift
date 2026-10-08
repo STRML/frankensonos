@@ -62,13 +62,24 @@ final class DaemonClient {
         try await withTaskCancellationHandler {
             let (bytes, response) = try await stream.bytes(for: request)
             try Task.checkCancellation()
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                throw URLError(.badServerResponse)
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            guard http.statusCode == 200 else {
+                // The daemon answered and said no. Read its reason so the app can show it.
+                var body = Data()
+                for try await byte in bytes {
+                    body.append(byte)
+                    if body.count >= 4096 { break }
+                }
+                let failure = Self.failure(status: http.statusCode, body: body)
+                AppLog.shared.add("stream", "events refused (HTTP \(failure.status)) \(failure.code ?? "-"): \(failure.detail)")
+                throw failure
             }
             guard http.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("text/event-stream") == true else {
+                AppLog.shared.add("stream", "events answered with \(http.value(forHTTPHeaderField: "Content-Type") ?? "no content type")")
                 throw URLError(.cannotParseResponse)
             }
             lastActivity = .now
+            AppLog.shared.add("stream", "events open, resuming after \(lastEventID ?? "start")")
             opened()
             var parser = SSEParser()
             // `bytes.lines` drops empty lines, and an empty line is what ends an SSE frame, so split on newlines by hand.
@@ -94,15 +105,31 @@ final class DaemonClient {
         try JSONDecoder().decode(T.self, from: await data(URLRequest(url: url)))
     }
     private func data(_ request: URLRequest) async throws -> Data {
-        let (body, response) = try await session.data(for: request)
+        let label = "\(request.httpMethod ?? "GET") \(request.url?.path ?? "?")"
+        let body: Data
+        let response: URLResponse
+        do {
+            (body, response) = try await session.data(for: request)
+        } catch {
+            if !(error is CancellationError) { AppLog.shared.add("http", "\(label) failed: \(error.localizedDescription)") }
+            throw error
+        }
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         guard (200..<300).contains(http.statusCode) else {
-            var failure = (try? JSONDecoder().decode(DaemonFailure.self, from: body)) ??
-                DaemonFailure(detail: "Daemon returned HTTP \(http.statusCode)", code: nil, hint: nil, suggestions: nil, retryable: nil)
-            failure.status = http.statusCode
+            let failure = Self.failure(status: http.statusCode, body: body)
+            AppLog.shared.add("http", "\(label) -> HTTP \(failure.status) \(failure.code ?? "-"): \(failure.detail)")
             throw failure
         }
+        if request.httpMethod == "POST" { AppLog.shared.add("http", "\(label) ok") }
         return body
+    }
+
+    /// The daemon's error body when it sent one, else a plain note with the status.
+    static func failure(status: Int, body: Data) -> DaemonFailure {
+        var failure = (try? JSONDecoder().decode(DaemonFailure.self, from: body)) ??
+            DaemonFailure(detail: "Daemon returned HTTP \(status)", code: nil, hint: nil, suggestions: nil, retryable: nil)
+        failure.status = status
+        return failure
     }
 }

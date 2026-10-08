@@ -2,13 +2,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 binary="$PWD/../target/release/fsonos"
-rows="1 2 6 7 8 9 10 11 12 13 15 17 19"
+rows="1 2 6 7 8 9 10 11 12 13 15 17 19 20 21"
 scratch=$(mktemp -d /private/tmp/fsonos-live.XXXXXX)
-sim_pid= serve_pid= monitor_pid= bonjour_pid=
+sim_pid= serve_pid= monitor_pid= bonjour_pid= stub_pid=
 cleanup() {
     trap - EXIT INT TERM
     if [[ -s "$scratch/serve.pid" ]]; then serve_pid=$(cat "$scratch/serve.pid"); fi
-    for pid in "$bonjour_pid" "$monitor_pid" "$serve_pid" "$sim_pid"; do
+    for pid in "$stub_pid" "$bonjour_pid" "$monitor_pid" "$serve_pid" "$sim_pid"; do
         if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi
     done
     for row in $rows; do
@@ -29,6 +29,11 @@ port=$(free_port)
 export FSONOS_DAEMON_URL="http://127.0.0.1:$port"
 export FSONOS_E2E_CONTROL="$scratch/control"
 export FSONOS_TAILSCALE=off FSONOS_EVENTS_PORT=0
+# Rows 20 and 21: a daemon whose policy refuses the live stream, the way the NAS did for a LAN caller.
+stub_port=$(free_port)
+export FSONOS_E2E_STUB_URL="http://127.0.0.1:$stub_port"
+python3 -I tools/stub-daemon.py "$stub_port" >/dev/null 2>&1 &
+stub_pid=$!
 # Row 19: advertise the daemon the way the NAS's avahi does, with a real Bonjour registration. It publishes this
 # Mac's LAN address, not the loopback one the test daemon listens on, so the row checks the name, port and an IPv4
 # host and never connects. (A loopback proxy registration resolves by name but never shows up in a browse.)

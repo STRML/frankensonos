@@ -26,6 +26,7 @@ extension LiveZoneStore {
         }
         try Task.checkCancellation()
         guard revision == snapshotRevision, !grouping || afterGrouping else { return }
+        AppLog.shared.add("refresh", "\(newZones.count) zones, \(newRooms.count) rooms, \(unavailable.count) unreachable")
         zoneRows = newZones
         roomRows = newRooms
         rooms = newRooms.map(roomKey)
