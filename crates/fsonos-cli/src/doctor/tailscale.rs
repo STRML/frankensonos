@@ -487,7 +487,7 @@ mod tests {
 
     fn serve(http: Option<&str>) -> ServeArgs {
         ServeArgs {
-            http: http.map(|a| a.parse().unwrap()),
+            http: http.map(|a| a.parse().unwrap()).into_iter().collect(),
             mcp_http: None,
             spotify_client_id: None,
             spotify_redirect_uri: String::new(),

@@ -244,7 +244,7 @@ mod tests {
         register(
             &mut runner,
             &ServeArgs {
-                http: Some("127.0.0.1:0".parse().unwrap()),
+                http: vec!["127.0.0.1:0".parse().unwrap()],
                 mcp_http: Some("127.0.0.1:0".parse().unwrap()),
                 spotify_client_id: None,
                 spotify_redirect_uri: String::new(),

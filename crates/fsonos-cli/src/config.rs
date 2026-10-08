@@ -182,10 +182,13 @@ pub fn ip_addresses(text: &str) -> Vec<IpAddr> {
 #[derive(Debug, Clone, clap::Args)]
 pub struct ServeArgs {
     /// HTTP API bind address [default: 127.0.0.1:8099 plus this host's
-    /// tailnet addresses when Tailscale is up]. Setting it binds exactly this
-    /// address (loopback behind Tailscale Serve, or the tailnet address).
-    #[arg(long, env = "FSONOS_HTTP_ADDR")]
-    pub http: Option<SocketAddr>,
+    /// tailnet addresses when Tailscale is up]. Setting it binds exactly these
+    /// addresses: one (loopback behind Tailscale Serve, or the tailnet
+    /// address), or a comma-separated list such as
+    /// `127.0.0.1:8099,192.168.1.20:8099` to serve the LAN and keep loopback
+    /// for on-host tools and the Spotify sign-in tunnel.
+    #[arg(long, env = "FSONOS_HTTP_ADDR", value_delimiter = ',')]
+    pub http: Vec<SocketAddr>,
 
     /// MCP streamable-HTTP bind address, endpoint path `/mcp` [default:
     /// 127.0.0.1:8098]. Loopback unless set: reach it from the tailnet
@@ -264,11 +267,16 @@ impl ServeArgs {
         }
     }
 
-    /// Where this machine reaches the HTTP API: the configured address, or
-    /// loopback on the default port (always among the bound addresses).
+    /// Where this machine reaches the HTTP API: a configured loopback
+    /// address, else the first configured one, else loopback on the default
+    /// port (always among the bound addresses).
     #[must_use]
     pub fn http_local(&self) -> SocketAddr {
         self.http
+            .iter()
+            .copied()
+            .find(|addr| addr.ip().is_loopback())
+            .or_else(|| self.http.first().copied())
             .unwrap_or(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), HTTP_PORT))
     }
 
@@ -279,14 +287,28 @@ impl ServeArgs {
             .unwrap_or(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), MCP_PORT))
     }
 
-    /// Where the HTTP API binds: the configured address, or loopback plus
+    /// Where the HTTP API binds: the configured addresses, or loopback plus
     /// the tailnet when Tailscale is up.
     #[must_use]
     pub fn http_plan(
         &self,
         tailnet: &fsonos_tailscale::TailnetStatus,
     ) -> fsonos_tailscale::BindPlan {
-        fsonos_tailscale::bind_plan(tailnet, HTTP_PORT, self.http)
+        match self.http.as_slice() {
+            [] => fsonos_tailscale::bind_plan(tailnet, HTTP_PORT, None),
+            [one] => fsonos_tailscale::bind_plan(tailnet, HTTP_PORT, Some(*one)),
+            many => fsonos_tailscale::BindPlan {
+                addrs: many.to_vec(),
+                reason: fsonos_tailscale::BindReason::Configured,
+                note: format!(
+                    "bound to {} as configured",
+                    many.iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            },
+        }
     }
 
     /// Where the MCP server binds: the configured address, else loopback.
@@ -522,7 +544,7 @@ mod tests {
     #[test]
     fn defaults_are_loopback() {
         let h = Harness::try_parse_from(["fsonos"]).unwrap();
-        assert_eq!((h.serve.http, h.serve.mcp_http), (None, None));
+        assert_eq!((h.serve.http.len(), h.serve.mcp_http), (0, None));
         assert_eq!(h.serve.http_local(), "127.0.0.1:8099".parse().unwrap());
         assert_eq!(h.serve.mcp_local(), "127.0.0.1:8098".parse().unwrap());
         assert_eq!(bind_scope(h.serve.http_local().ip()), BindScope::Loopback);
@@ -550,13 +572,42 @@ mod tests {
             ["127.0.0.1:8098".parse::<SocketAddr>().unwrap()]
         );
         let h = Harness::try_parse_from(["fsonos", "--http", "100.70.1.2:9000"]).unwrap();
-        assert_eq!(h.serve.http, Some("100.70.1.2:9000".parse().unwrap()));
+        assert_eq!(
+            h.serve.http,
+            ["100.70.1.2:9000".parse::<SocketAddr>().unwrap()]
+        );
         // A configured address is bound alone, even on a tailnet.
         assert_eq!(
             h.serve.http_plan(&on).addrs,
             ["100.70.1.2:9000".parse::<SocketAddr>().unwrap()]
         );
         assert!(Harness::try_parse_from(["fsonos", "--http", "not-an-addr"]).is_err());
+    }
+
+    #[test]
+    fn http_binds_exactly_the_addresses_listed() {
+        // A daemon on the LAN that also wants loopback: on-host tools, and the Spotify sign-in through an ssh tunnel,
+        // reach the loopback listener, whose callers are the full-rights local ones.
+        let h = Harness::try_parse_from(["fsonos", "--http", "127.0.0.1:8099,192.168.86.251:8099"])
+            .unwrap();
+        let (loopback, lan) = (
+            "127.0.0.1:8099".parse::<SocketAddr>().unwrap(),
+            "192.168.86.251:8099".parse::<SocketAddr>().unwrap(),
+        );
+        assert_eq!(h.serve.http, [loopback, lan]);
+        let off = fsonos_tailscale::TailnetStatus::Unavailable(
+            fsonos_tailscale::Unavailable::NotInstalled,
+        );
+        let plan = h.serve.http_plan(&off);
+        assert_eq!(plan.addrs, [loopback, lan]);
+        assert_eq!(plan.reason, fsonos_tailscale::BindReason::Configured);
+        // This machine reaches the API at its loopback address when one is listed.
+        assert_eq!(h.serve.http_local(), loopback);
+        // Only a LAN address: that is what a local client is pointed at.
+        let lan_only =
+            Harness::try_parse_from(["fsonos", "--http", "192.168.86.251:8099"]).unwrap();
+        assert_eq!(lan_only.serve.http_local(), lan);
+        assert!(Harness::try_parse_from(["fsonos", "--http", "127.0.0.1:8099,nope"]).is_err());
     }
 
     #[test]
