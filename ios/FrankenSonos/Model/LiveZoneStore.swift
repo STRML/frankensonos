@@ -36,6 +36,9 @@ final class LiveZoneStore: ZoneStore {
     var grouping = false
     /// The newest group request made while another was still in flight; it runs when that one finishes.
     var queuedGrouping: (rooms: [String], zoneID: UUID)?
+    /// What the user last asked of a zone's transport, until the speaker confirms it or `holdSeconds` pass.
+    var transportIntents: [UUID: (playing: Bool, until: Date)] = [:]
+    static let holdSeconds: Double = 6
     var snapshotRevision = 0
     var lifecycleRevision = 0
     var streamOpen = false
@@ -80,6 +83,7 @@ final class LiveZoneStore: ZoneStore {
     private func connect() async {
         var attempt = 0
         while !Task.isCancelled && active {
+            var streaming = false
             do {
                 // A retry while the app is already showing live data should not flash "Refreshing".
                 if hasConnected && connectionStatus != .live { connectionStatus = .refreshing }
@@ -89,6 +93,7 @@ final class LiveZoneStore: ZoneStore {
                 // heartbeat (up to 15 s). The data is fresh now, so do not wait for the stream to say so.
                 hasConnected = true
                 connectionStatus = .live
+                streaming = true
                 try await client.events(lastEventID: lastEventID, opened: {
                     self.hasConnected = true
                     self.streamOpen = true
@@ -99,7 +104,7 @@ final class LiveZoneStore: ZoneStore {
             } catch {
                 if Task.isCancelled || !active { return }
                 streamOpen = false
-                if let failure = error as? DaemonFailure, (400..<500).contains(failure.status) {
+                if streaming, let failure = error as? DaemonFailure, (400..<500).contains(failure.status) {
                     // The daemon is reachable and said no (a policy, usually). HTTP works, so the app is not
                     // disconnected: say why updates are not live and keep refreshing on the retry cadence.
                     streamNote = "Live updates are off: \(failure.detail)"

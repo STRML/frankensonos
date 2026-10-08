@@ -48,7 +48,7 @@ extension LiveZoneStore {
             let elapsed = zone.isPlaying ? max(0, now.timeIntervalSince(base.at)) : 0
             positions[zone.id] = (base.seconds + elapsed, now)
         }
-        zones[index].isPlaying = transport == "playing"
+        zones[index].isPlaying = shownPlaying(zone: zone.id, reported: transport, current: zone.isPlaying)
         if let coordinator = zone.roomNames.first, let old = states[coordinator] {
             states[coordinator] = ZoneStateDTO(zone: old.zone, transport_state: transport, volume: old.volume, track: old.track)
         }

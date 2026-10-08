@@ -81,6 +81,33 @@ final class LiveChecks: XCTestCase {
             try require(lines.last?.hasSuffix("line 699") == true, "newest line missing")
             try require(!lines.contains { $0.hasSuffix("line 0") }, "oldest line was not dropped")
         }
+        await check(22, "a tap on play holds through the speaker's lag, and gives up if it never plays") {
+            let house = LiveZoneStore(baseURL: stubURL)
+            house.start()
+            defer { house.setActive(false) }
+            try await wait("stub house", seconds: 12) { house.zones.count == 2 && house.connectionStatus == .live }
+            @MainActor func zoneID(_ room: String) -> UUID { house.zones.first { $0.roomNames == [room] }!.id }
+            @MainActor func shown(_ id: UUID) -> Bool { house.zones.first { $0.id == id }?.isPlaying ?? false }
+            // A real Sonos answers the first read after a resume with the old state, then "transitioning", then "playing".
+            let lag = zoneID("Lag Room")
+            try require(!shown(lag), "starts paused")
+            house.togglePlayback(for: lag)
+            try require(shown(lag), "the tap did not show playing at once")
+            let until = Date().addingTimeInterval(5)
+            while Date() < until {
+                try require(shown(lag), "fell back to paused while the speaker caught up")
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            house.togglePlayback(for: lag)
+            try require(!shown(lag), "the pause tap did not show paused at once")
+            try await Task.sleep(for: .seconds(1.5))
+            try require(!shown(lag), "a pause was undone by a late report")
+            // A speaker that never starts must not be shown playing for ever.
+            let stuck = zoneID("Stuck Room")
+            house.togglePlayback(for: stuck)
+            try require(shown(stuck), "the tap did not show playing")
+            try await wait("gives up on a speaker that never plays", seconds: 12) { !shown(stuck) }
+        }
         await check(1, "unreachable launch stays empty/offline, then bootstraps") {
             try await control("stop")
             store.start()

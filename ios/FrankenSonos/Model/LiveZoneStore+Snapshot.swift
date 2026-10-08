@@ -66,7 +66,7 @@ extension LiveZoneStore {
             let track = state?.track
             let id = StableIdentity.zone(room: row.coordinator_room, household: row.household)
             let members = row.members.map { key(name: $0, household: row.household) }
-            let playing = (state?.transport_state ?? row.transport_state) == "playing"
+            let playing = shownPlaying(zone: id, reported: state?.transport_state ?? row.transport_state, current: zones.first(where: { $0.id == id })?.isPlaying)
             if resyncPosition || positions[id] == nil {
                 positions[id] = (track?.position_secs ?? 0, Date())
             }
