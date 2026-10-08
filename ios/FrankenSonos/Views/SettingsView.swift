@@ -5,6 +5,7 @@ import UIKit
 
 struct SettingsView: View {
     @EnvironmentObject private var store: MockZoneStore
+    @Environment(\.colorScheme) private var scheme
     @State private var daemonURL = DaemonSettings.urlString
     @State private var invalidURL = false
     @State private var detail: String?
@@ -37,7 +38,7 @@ struct SettingsView: View {
             if invalidURL { Text("Enter an http:// or https:// daemon URL.").s1Font(12).foregroundStyle(.red) }
             foundDaemons
         }
-        .padding(16).background(.white)
+        .padding(16).background(S1Palette.panel(scheme))
         .onAppear { browser.start() }
         .onDisappear { browser.stop() }
     }
@@ -77,7 +78,7 @@ struct SettingsView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Copy log to clipboard")
         }
-        .padding(16).background(.white).padding(.top, 12)
+        .padding(16).background(S1Palette.panel(scheme)).padding(.top, 12)
     }
     private func copyLog() {
         #if canImport(UIKit)
@@ -107,7 +108,7 @@ struct SettingsView: View {
                     }
                     ForEach(store.isLive ? [] : sections, id: \.0) { section in
                         Text(section.0.uppercased()).s1Font(11, weight: .semibold)
-                            .foregroundStyle(Color(white: 0.38))
+                            .foregroundStyle(S1Palette.secondary(scheme))
                             .padding(.horizontal, 16).padding(.top, 22).padding(.bottom, 8)
                         VStack(spacing: 0) {
                             ForEach(section.1, id: \.1) { row in
@@ -116,11 +117,11 @@ struct SettingsView: View {
                                         Image(systemName: row.0).font(.system(size: 19, weight: .light)).frame(width: 24)
                                         Text(row.1).s1Font(14)
                                         Spacer(minLength: 4)
-                                        Text(row.2).s1Font(11).foregroundStyle(Color(white: 0.38)).lineLimit(1)
-                                        Image(systemName: "chevron.right").font(.system(size: 11)).foregroundStyle(Color(white: 0.38))
+                                        Text(row.2).s1Font(11).foregroundStyle(S1Palette.secondary(scheme)).lineLimit(1)
+                                        Image(systemName: "chevron.right").font(.system(size: 11)).foregroundStyle(S1Palette.secondary(scheme))
                                     }
                                     .padding(.horizontal, 16).frame(minHeight: 50)
-                                    .background(.white)
+                                    .background(S1Palette.panel(scheme))
                                     .overlay(alignment: .bottom) { Rectangle().fill(Color.black.opacity(0.08)).frame(height: 0.5).padding(.leading, 52) }
                                     .contentShape(Rectangle())
                                 }
@@ -128,7 +129,7 @@ struct SettingsView: View {
                             }
                         }
                     }
-                    Text(store.isLive ? "FrankenSonos · Daemon remote" : "FrankenSonos · Mock remote").s1Font(11).foregroundStyle(Color(white: 0.38))
+                    Text(store.isLive ? "FrankenSonos · Daemon remote" : "FrankenSonos · Mock remote").s1Font(11).foregroundStyle(S1Palette.secondary(scheme))
                         .frame(maxWidth: .infinity).padding(.vertical, 24)
                 }
                 .frame(width: geometry.size.width, alignment: .leading)
@@ -136,7 +137,7 @@ struct SettingsView: View {
             }
             .scrollClipDisabled()
         }
-        .background(Color(white: 0.95))
+        .background(S1Palette.page(scheme))
         .alert(detail ?? "Settings", isPresented: Binding(get: { detail != nil }, set: { if !$0 { detail = nil } })) {
             Button("OK") { detail = nil }
         } message: { Text("This setting is a local mock preview.") }

@@ -22,7 +22,9 @@ enum SketchRenderer {
             ("now-playing-rooms-sheet-scrolled-end", .rooms, true, false, true, true, .dark),
             ("settings", .settings, false, false, false, false, .light),
             ("search", .search, false, false, false, false, .light),
-            ("search-selected-room", .search, false, false, false, false, .light)
+            ("search-selected-room", .search, false, false, false, false, .light),
+            ("settings-dark", .settings, false, false, false, false, .dark),
+            ("search-dark", .search, false, false, false, false, .dark)
         ]
         for (name, tab, player, group, compact, end, scheme) in screens {
             let store = MockZoneStore()
@@ -37,7 +39,7 @@ enum SketchRenderer {
             }
         }
         try contactSheet(in: output)
-        print("Rendered 12 screens at 780x1688 and overview.png at 3120x5064")
+        print("Rendered \(screens.count) screens at 780x1688 and overview.png at 3120x5064")
     }
 
     private static func render<Content: View>(_ content: Content, named name: String, in directory: URL, update: () -> Void = {}) throws {

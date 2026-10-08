@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SearchView: View {
     @EnvironmentObject private var store: MockZoneStore
+    @Environment(\.colorScheme) private var scheme
     @State private var query = ""
     @State private var service = "All"
     @State private var recent = ["Northlight", "Piano", "Amber Fields", "Evening music"]
@@ -16,16 +17,16 @@ struct SearchView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(Color(white: 0.38))
+                Image(systemName: "magnifyingglass").foregroundStyle(S1Palette.secondary(scheme))
                 TextField("Artists, songs, albums", text: $query).textFieldStyle(.plain).s1Font(14)
                     .accessibilityLabel("Search music")
                 if !query.isEmpty {
-                    Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Color(white: 0.38)) }
+                    Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(S1Palette.secondary(scheme)) }
                         .buttonStyle(.plain).accessibilityLabel("Clear search")
                 }
             }
             .padding(.horizontal, 12).frame(height: 40)
-            .background(Color(white: 0.94), in: RoundedRectangle(cornerRadius: 7))
+            .background(S1Palette.field(scheme), in: RoundedRectangle(cornerRadius: 7))
             .padding(.horizontal, 16).padding(.top, 16)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -33,8 +34,8 @@ struct SearchView: View {
                         Button { service = name } label: {
                             Text(name).s1Font(12, weight: service == name ? .semibold : .regular)
                                 .fixedSize().padding(.horizontal, 12).frame(height: 32)
-                                .foregroundStyle(service == name ? .white : Color(white: 0.2))
-                                .background(service == name ? Color(white: 0.15) : Color(white: 0.94), in: Capsule())
+                                .foregroundStyle(service == name ? S1Palette.chipSelectedText(scheme) : S1Palette.equalizer(scheme))
+                                .background(service == name ? S1Palette.chipSelected(scheme) : S1Palette.field(scheme), in: Capsule())
                         }
                         .buttonStyle(.plain).accessibilityAddTraits(service == name ? .isSelected : [])
                     }
@@ -54,13 +55,13 @@ struct SearchView: View {
                         ForEach(store.isLive ? [] : recent, id: \.self) { text in
                             Button { query = text } label: {
                                 HStack(spacing: 12) {
-                                    Image(systemName: "clock").font(.system(size: 18, weight: .light)).foregroundStyle(Color(white: 0.38))
+                                    Image(systemName: "clock").font(.system(size: 18, weight: .light)).foregroundStyle(S1Palette.secondary(scheme))
                                     Text(text).s1Font(14)
                                     Spacer()
-                                    Image(systemName: "arrow.up.left").font(.system(size: 12)).foregroundStyle(Color(white: 0.38))
+                                    Image(systemName: "arrow.up.left").font(.system(size: 12)).foregroundStyle(S1Palette.secondary(scheme))
                                 }
                                 .padding(.horizontal, 16).frame(height: 52)
-                                .overlay(alignment: .bottom) { Rectangle().fill(Color.black.opacity(0.08)).frame(height: 0.5).padding(.leading, 46) }
+                                .overlay(alignment: .bottom) { Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 0.5).padding(.leading, 46) }
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -77,7 +78,7 @@ struct SearchView: View {
                             openPlayer()
                         }
                     }
-                    if results.isEmpty { Text("No songs found").s1Font(13).foregroundStyle(Color(white: 0.38)).padding(16) }
+                    if results.isEmpty { Text("No songs found").s1Font(13).foregroundStyle(S1Palette.secondary(scheme)).padding(16) }
                 }
                 .padding(.bottom, 16)
             }

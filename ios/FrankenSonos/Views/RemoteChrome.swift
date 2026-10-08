@@ -14,6 +14,13 @@ enum S1Palette {
     static func secondary(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? Color(red: 0.72, green: 0.72, blue: 0.72) : Color(red: 0.38, green: 0.38, blue: 0.38)
     }
+    /// A grouped panel on a page (Settings): white on light gray, dark gray on near black.
+    static func panel(_ scheme: ColorScheme) -> Color { scheme == .dark ? Color(white: 0.14) : .white }
+    static func page(_ scheme: ColorScheme) -> Color { scheme == .dark ? Color(white: 0.075) : Color(white: 0.95) }
+    /// A text field or an unselected chip sitting on the surface.
+    static func field(_ scheme: ColorScheme) -> Color { scheme == .dark ? Color(white: 0.17) : Color(white: 0.94) }
+    static func chipSelected(_ scheme: ColorScheme) -> Color { scheme == .dark ? .white : Color(white: 0.15) }
+    static func chipSelectedText(_ scheme: ColorScheme) -> Color { scheme == .dark ? .black : .white }
     static func equalizer(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? Color(red: 0.88, green: 0.88, blue: 0.88) : Color(red: 0.2, green: 0.2, blue: 0.2)
     }
