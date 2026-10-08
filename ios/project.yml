@@ -18,6 +18,9 @@ targets:
       path: Generated/Info.plist
       properties:
         CFBundleDisplayName: FrankenSonos
+        # XcodeGen writes literal 1.0 and 1 unless told otherwise, which ignores the workflow's build number and tag.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
