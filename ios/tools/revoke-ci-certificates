@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Revokes the throwaway development certificates that Xcode's cloud signing creates on every CI archive.
+#
+#   tools/revoke-ci-certificates [--dry-run] [--from-json certificates.json]
+#
+# A CI runner is a fresh machine, so each archive makes a new "Apple Development: Created via API" certificate, and
+# the account stops allowing new ones after about a dozen. Only certificates with that exact name and the DEVELOPMENT
+# type are touched, and only once they are MIN_AGE_MINUTES old (default 60), so a build that is still running keeps its
+# certificate. A certificate lasts a year and the API gives only its expiry, so its age is taken from that.
+#
+# Needs `asc` signed in (credentials from the environment: see `asc auth --help`). --from-json reads the output of
+# `asc certificates list --output json` from a file instead, which is how the test feeds it fixtures.
+set -euo pipefail
+
+dry_run=0
+from_json=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) dry_run=1 ;;
+    --from-json) from_json="${2:?--from-json needs a file}"; shift ;;
+    *) echo "usage: revoke-ci-certificates [--dry-run] [--from-json file]" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+if [ -n "$from_json" ]; then
+  list="$(cat "$from_json")"
+else
+  list="$(asc certificates list --output json)"
+fi
+
+ids="$(printf '%s' "$list" | MIN_AGE_MINUTES="${MIN_AGE_MINUTES:-60}" python3 -I -c '
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+
+NAME = "Apple Development: Created via API"
+min_age = timedelta(minutes=int(os.environ["MIN_AGE_MINUTES"]))
+now = datetime.now(timezone.utc)
+for cert in json.load(sys.stdin)["data"]:
+    attributes = cert["attributes"]
+    if attributes.get("certificateType") != "DEVELOPMENT" or attributes.get("name") != NAME:
+        continue
+    expires = datetime.fromisoformat(attributes["expirationDate"])
+    if now - (expires - timedelta(days=365)) >= min_age:
+        print(cert["id"])
+')"
+
+if [ -z "$ids" ]; then
+  echo "No CI certificates old enough to revoke."
+  exit 0
+fi
+
+failed=0
+for id in $ids; do
+  if [ "$dry_run" = 1 ]; then
+    echo "would revoke $id"
+  elif asc certificates revoke --id "$id" --confirm >/dev/null; then
+    echo "revoked $id"
+  else
+    echo "could not revoke $id" >&2
+    failed=1
+  fi
+done
+exit "$failed"

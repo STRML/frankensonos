@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Fails when an iOS app bundle declares no app icon, which App Store Connect rejects at upload.
+#
+#   tools/check-app-icon path/to/App.app
+#
+# Exit 0: an icon is declared and compiled in. Exit 1: it is not. Exit 2: no such bundle.
+set -euo pipefail
+
+app="${1:?usage: check-app-icon <path/to/App.app>}"
+[ -d "$app" ] || { echo "No app bundle at $app" >&2; exit 2; }
+
+# Not `plutil -p | grep -q`: grep -q can exit early and break the pipe under pipefail (see check-no-dev-console).
+name=$(plutil -extract CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconName raw -o - "$app/Info.plist" 2>/dev/null || true)
+if [ -z "$name" ]; then
+  echo "$app declares no app icon (CFBundleIconName is missing from Info.plist)." >&2
+  exit 1
+fi
+if [ ! -f "$app/Assets.car" ]; then
+  echo "$app has no Assets.car, so the icon $name is not compiled in." >&2
+  exit 1
+fi
+# Capture, then test: the car must hold an image set with the declared name, not merely exist.
+info=$(xcrun assetutil --info "$app/Assets.car" 2>/dev/null || true)
+case "$info" in
+  *"\"Name\" : \"$name\""*) ;;
+  *) echo "Assets.car has no image named $name." >&2; exit 1 ;;
+esac
+echo "App icon $name is declared and compiled into $app."
