@@ -33,7 +33,12 @@ struct SettingsView: View {
             HStack {
                 Text(URL(string: store.daemonURLString)?.host ?? store.daemonURLString).s1Font(11).foregroundStyle(.secondary)
                 Spacer()
-                Button("Connect", action: saveURL).s1Font(13, weight: .semibold)
+                // Connect only when the field holds an address other than the one in use; Retry when that one is down.
+                if !addressIsCurrent {
+                    Button("Connect", action: saveURL).s1Font(13, weight: .semibold)
+                } else if store.connectionStatus == .offline {
+                    Button("Retry", action: store.retry).s1Font(13, weight: .semibold)
+                }
             }
             if invalidURL { Text("Enter an http:// or https:// daemon URL.").s1Font(12).foregroundStyle(.red) }
             foundDaemons
@@ -41,6 +46,9 @@ struct SettingsView: View {
         .padding(16).background(S1Palette.panel(scheme))
         .onAppear { browser.start() }
         .onDisappear { browser.stop() }
+    }
+    private var addressIsCurrent: Bool {
+        DaemonSettings.validated(daemonURL)?.absoluteString == store.daemonURLString
     }
     /// Daemons advertising themselves on this network; tapping one connects to it.
     @ViewBuilder private var foundDaemons: some View {
@@ -57,6 +65,9 @@ struct SettingsView: View {
                     Text(daemon.name).s1Font(14)
                     Spacer()
                     Text(daemon.url.host ?? "").s1Font(11).foregroundStyle(.secondary)
+                    if daemon.url.absoluteString == store.daemonURLString {
+                        Image(systemName: "checkmark").font(.system(size: 12, weight: .semibold))
+                    }
                 }
             }
             .buttonStyle(.plain)
