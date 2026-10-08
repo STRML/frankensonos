@@ -5,6 +5,7 @@ struct SettingsView: View {
     @State private var daemonURL = DaemonSettings.urlString
     @State private var invalidURL = false
     @State private var detail: String?
+    @StateObject private var browser = DaemonBrowser()
     private let sections: [(String, [(String, String, String)])] = [
         ("System", [("house", "My System", "9 speakers"), ("slider.horizontal.3", "Room Settings", ""), ("alarm", "Alarms", "None set")]),
         ("Services and Voice", [("music.note", "Music Services", "3 services"), ("mic", "Voice Assistants", "Not set up")]),
@@ -30,8 +31,31 @@ struct SettingsView: View {
                 Button("Connect", action: saveURL).s1Font(13, weight: .semibold)
             }
             if invalidURL { Text("Enter an http:// or https:// daemon URL.").s1Font(12).foregroundStyle(.red) }
+            foundDaemons
         }
         .padding(16).background(.white)
+        .onAppear { browser.start() }
+        .onDisappear { browser.stop() }
+    }
+    /// Daemons advertising themselves on this network; tapping one connects to it.
+    @ViewBuilder private var foundDaemons: some View {
+        Text("FOUND ON YOUR NETWORK").s1Font(11, weight: .semibold).foregroundStyle(.secondary).padding(.top, 4)
+        if browser.found.isEmpty {
+            Text("Looking for daemons. Away from home, type the address above.").s1Font(12).foregroundStyle(.secondary)
+        }
+        ForEach(browser.found) { daemon in
+            Button {
+                daemonURL = daemon.url.absoluteString
+                saveURL()
+            } label: {
+                HStack {
+                    Text(daemon.name).s1Font(14)
+                    Spacer()
+                    Text(daemon.url.host ?? "").s1Font(11).foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+        }
     }
     private func saveURL() { invalidURL = !store.changeDaemonURL(daemonURL) }
     var body: some View {

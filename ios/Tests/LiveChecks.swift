@@ -40,6 +40,22 @@ final class LiveChecks: XCTestCase {
         let url = URL(string: env["FSONOS_DAEMON_URL"]!)!
         let client = DaemonClient(baseURL: url)
         let store = LiveZoneStore(baseURL: url)
+        await check(19, "bonjour finds an advertised daemon and resolves it to a URL") {
+            let name = env["FSONOS_E2E_BONJOUR_NAME"]!
+            let port = Int(env["FSONOS_E2E_BONJOUR_PORT"]!)!
+            let browser = DaemonBrowser()
+            browser.start()
+            defer { browser.stop() }
+            do {
+                try await wait("bonjour discovery", seconds: 20) { browser.found.contains { $0.name == name } }
+            } catch {
+                throw CheckFailure(message: "bonjour discovery of '\(name)': saw \(browser.found.map(\.name))")
+            }
+            let hit = browser.found.first { $0.name == name }!
+            try require(hit.url.port == port, "port was lost: \(hit.url)")
+            // IPv4 when the registering host has one, else its .local name (this Mac publishes only IPv6 link-local).
+            try require(hit.url.host.map { !$0.isEmpty } == true, "no host in \(hit.url)")
+        }
         await check(1, "unreachable launch stays empty/offline, then bootstraps") {
             try await control("stop")
             store.start()

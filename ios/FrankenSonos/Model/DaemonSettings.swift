@@ -2,6 +2,8 @@ import Foundation
 
 enum DaemonSettings {
     private static let key = "daemonURL"
+    /// False until a daemon URL has been chosen, by typing it or by picking one found with Bonjour.
+    static var isConfigured: Bool { UserDefaults.standard.string(forKey: key) != nil }
     static var urlString: String {
         get { UserDefaults.standard.string(forKey: key) ?? "http://127.0.0.1:8099" }
         set { UserDefaults.standard.set(newValue, forKey: key) }

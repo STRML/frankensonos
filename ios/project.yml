@@ -27,6 +27,9 @@ targets:
         # The app only speaks HTTPS or plain HTTP to a daemon the owner runs; nothing here is exempt encryption work.
         ITSAppUsesNonExemptEncryption: false
         NSLocalNetworkUsageDescription: Connect to your FrankenSonos daemon on your local network.
+        # iOS only lets an app browse Bonjour service types it declares.
+        NSBonjourServices:
+          - _fsonos._tcp
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
           NSExceptionDomains:

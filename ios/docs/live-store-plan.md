@@ -55,6 +55,7 @@ Gaps the app must live with in v1 (daemon work is a separate track):
 | 16 | `player.health` offline | dim that room row, disable its controls | commands hang | "Offline" subtitle |
 | 17 | App backgrounded | cancel SSE, on foreground refetch everything then reconnect | stale UI | fresh on return |
 | 18 | Daemon URL setting | stored in UserDefaults, editable in Settings, default `http://127.0.0.1:8099`; HTTP allowed for loopback and `*.ts.net` | ATS blocks HTTP | works, Settings shows the host |
+| 19 | No daemon URL chosen yet, or the user wants another | browse `_fsonos._tcp` over Bonjour, resolve each service with NetService (IPv4 address, else the `.local` name); first launch picks the first one found, Settings lists them all | Bonjour type missing from `NSBonjourServices`, a host that publishes only IPv6, multicast blocked off the LAN | the daemon is found with no typing; away from home the URL field still works |
 
 ## Test plan (red first)
 
