@@ -128,7 +128,7 @@ final class LiveChecks: XCTestCase {
             try require(model.liked.map(\.title) == ["Aria", "Blue in Green"] && model.liked[1].artistLine == "Miles Davis, Bill Evans", "liked tracks")
         }
         await check(24, "Spotify: the real not-configured status explains itself, other states are told apart") {
-            var status = try JSONDecoder().decode(SpotifyStatus.self, from: fixture("spotify-status-unconfigured.json"))
+            var status = try JSONDecoder().decode(SpotifyStatus.self, from: fixture("status-spotify-unconfigured.json"))
             try require(SpotifyModel.phase(status: status, unreachable: nil, albums: 0) == .notConfigured, "unconfigured")
             status.configured = true
             try require(SpotifyModel.phase(status: status, unreachable: nil, albums: 0) == .signedOut(reauthorize: false), "configured, not signed in")
