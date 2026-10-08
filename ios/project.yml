@@ -32,6 +32,9 @@ targets:
               NSExceptionAllowsInsecureHTTPLoads: true
     settings:
       base:
+        # iPhone only. XcodeGen's target default is "1,2", which beats the project-level setting and makes App Store
+        # Connect demand all four orientations for iPad multitasking.
+        TARGETED_DEVICE_FAMILY: "1"
         PRODUCT_BUNDLE_IDENTIFIER: com.samuelreed.frankensonos
         PRODUCT_NAME: FrankenSonos
         MARKETING_VERSION: "1.0"
