@@ -38,8 +38,15 @@ enum SketchRenderer {
                 if name == "search-selected-room" { store.selectedZoneID = store.zone(for: "Movie Room").id }
             }
         }
+        // The live Spotify library, with canned data: the mock store never reaches that branch of Browse.
+        for (name, scheme) in [("spotify", ColorScheme.light), ("spotify-dark", ColorScheme.dark)] {
+            let store = MockZoneStore()
+            try render(DeviceFrame(dark: scheme == .dark) {
+                ScrollView { SpotifyBrowse(model: .sample()).environmentObject(store) }.modifier(S1Surface())
+            }.environment(\.colorScheme, scheme), named: name, in: output)
+        }
         try contactSheet(in: output)
-        print("Rendered \(screens.count) screens at 780x1688 and overview.png at 3120x5064")
+        print("Rendered \(screens.count + 2) screens at 780x1688 and overview.png at 3120x5064")
     }
 
     private static func render<Content: View>(_ content: Content, named name: String, in directory: URL, update: () -> Void = {}) throws {

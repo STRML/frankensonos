@@ -31,6 +31,8 @@ final class LiveZoneStore: ZoneStore {
     var draggingRooms: Set<String> = []
     var volumeTasks: [String: Task<Void, Never>] = [:]
     var commandTasks: [UUID: Task<Void, Never>] = [:]
+    /// The latest command POST per room; the next one for that room waits for it.
+    var commandChain: [String: Task<Void, Never>] = [:]
     var refetchTasks: [String: Task<Void, Never>] = [:]
     var topologyTask: Task<Void, Never>?
     var grouping = false
@@ -69,6 +71,8 @@ final class LiveZoneStore: ZoneStore {
         refetchTasks = [:]
         commandTasks.values.forEach { $0.cancel() }
         commandTasks = [:]
+        commandChain.values.forEach { $0.cancel() }
+        commandChain = [:]
         volumeTasks.values.forEach { $0.cancel() }
         volumeTasks = [:]
         for (room, edit) in volumeEdits { roomVolumes[room] = edit.original }

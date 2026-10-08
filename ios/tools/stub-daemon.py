@@ -1,4 +1,4 @@
-"""A stand-in daemon for the E2E harness (rows 20 to 22).
+"""A stand-in daemon for the E2E harness (rows 20 to 25).
 
     stub-daemon.py PORT
 
@@ -8,12 +8,15 @@
   - "Lag Room" answers a resume the way a Sonos does, measured on a real one: the first read after the command still
     says `paused`, the next says `transitioning`, then `playing`. A pause takes effect at once.
   - "Stuck Room" accepts a resume and never starts playing, so the app must not claim it plays forever.
+* The Spotify routes answer with the exact shapes of fsonos-api's spotify.rs (rows 23 to 25): status, a sync that
+  runs for two reads, two albums, their tracks and liked tracks. POST /play and /dj/* are recorded and GET
+  /_debug/posts returns what was posted, so a test can check what the app sent.
 """
 import json
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlparse
 
 DENIED = {
     "detail": "unknown may not use events: unknown may only use: list_zones, play, pause",
@@ -26,6 +29,33 @@ LOCK = threading.Lock()
 # reads since the last resume; None when no resume is pending
 PENDING = {"Lag Room": None, "Stuck Room": None}
 TRANSPORT = {"Lag Room": "paused", "Stuck Room": "paused"}
+POSTS = []
+# Sync progress: None before a sync, else the number of status reads since it started.
+SYNC = {"reads": None}
+
+ALBUMS = [
+    {"id": "a1", "title": "Bach: Goldberg Variations, BWV 988", "artist": "Glenn Gould", "year": 1981, "tracks": 3,
+     "uri": "spotify:album:a1", "art_url": "https://cdn.example.invalid/bach.jpg"},
+    {"id": "a2", "title": "Kind of Blue", "artist": "Miles Davis", "year": 1959, "tracks": 2,
+     "uri": "spotify:album:a2", "art_url": None},
+]
+ALBUM_TRACKS = {
+    "a1": [
+        {"id": "t1", "title": "Aria", "artists": ["Glenn Gould"], "uri": "spotify:track:t1", "duration_secs": 183, "disc": 1, "number": 1},
+        {"id": "t2", "title": "Variation 1", "artists": ["Glenn Gould"], "uri": "spotify:track:t2", "duration_secs": 62, "disc": 1, "number": 2},
+        {"id": "t3", "title": "Variation 2", "artists": ["Glenn Gould"], "uri": "spotify:track:t3", "duration_secs": 51, "disc": 1, "number": 3},
+    ],
+    "a2": [
+        {"id": "t4", "title": "So What", "artists": ["Miles Davis"], "uri": "spotify:track:t4", "duration_secs": 562, "disc": 1, "number": 1},
+        {"id": "t5", "title": "Blue in Green", "artists": ["Miles Davis", "Bill Evans"], "uri": "spotify:track:t5", "duration_secs": 338, "disc": 1, "number": 2},
+    ],
+}
+LIKED = [
+    {"id": "t1", "title": "Aria", "artists": ["Glenn Gould"], "uri": "spotify:track:t1", "duration_secs": 183, "disc": 1,
+     "number": 1, "album": "Bach: Goldberg Variations, BWV 988", "art_url": "https://cdn.example.invalid/bach.jpg"},
+    {"id": "t5", "title": "Blue in Green", "artists": ["Miles Davis", "Bill Evans"], "uri": "spotify:track:t5",
+     "duration_secs": 338, "disc": 1, "number": 2, "album": "Kind of Blue", "art_url": None},
+]
 
 
 def transport(room, count_read):
@@ -46,6 +76,31 @@ def zone(room):
     return {"coordinator_room": room, "members": [room], "transport_state": transport(room, False), "household": "S2"}
 
 
+def spotify_status():
+    with LOCK:
+        reads = SYNC["reads"]
+        if reads is not None:
+            SYNC["reads"] = reads + 1
+    done = reads is not None and reads >= 2
+    running = reads is not None and not done
+    library = {"albums": 2, "tracks": 2, "synced_at": 1791500000} if done else {"albums": 0, "tracks": 0, "synced_at": None}
+    return {
+        "configured": True,
+        "signed_in": True,
+        "reauthorize": False,
+        "library": library,
+        "sync": {"running": running, "done": 5 if done else (1 if running else 0), "total": 5 if reads is not None else 0, "error": None},
+    }
+
+
+def page(items, query):
+    needle = (query.get("q") or [""])[0].lower()
+    offset = int((query.get("offset") or ["0"])[0])
+    limit = int((query.get("limit") or ["50"])[0])
+    hits = [i for i in items if not needle or needle in json.dumps(i).lower()]
+    return {"total": len(hits), "items": hits[offset:offset + limit]}
+
+
 class Handler(BaseHTTPRequestHandler):
     def reply(self, status, body):
         data = json.dumps(body).encode()
@@ -56,7 +111,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        path = self.path.split("?")[0]
+        parsed = urlparse(self.path)
+        path, query = parsed.path, parse_qs(parsed.query)
         if path == "/zones":
             self.reply(200, [zone(room) for room in PENDING])
         elif path == "/rooms":
@@ -68,6 +124,18 @@ class Handler(BaseHTTPRequestHandler):
                 return
             room = room.split("@")[0]
             self.reply(200, {"zone": zone(room), "transport_state": transport(room, True), "volume": 20})
+        elif path == "/spotify/status":
+            self.reply(200, spotify_status())
+        elif path == "/spotify/albums":
+            self.reply(200, page(ALBUMS, query))
+        elif path.startswith("/spotify/albums/") and path.endswith("/tracks"):
+            album = path[len("/spotify/albums/"):-len("/tracks")]
+            self.reply(200, ALBUM_TRACKS.get(album, []))
+        elif path == "/spotify/tracks":
+            self.reply(200, page(LIKED, query))
+        elif path == "/_debug/posts":
+            with LOCK:
+                self.reply(200, list(POSTS))
         elif path == "/health":
             self.reply(200, {"status": "ok", "version": "stub"})
         elif path == "/events":
@@ -78,8 +146,19 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("content-length", "0"))
         body = json.loads(self.rfile.read(length) or b"{}")
-        room = str(body.get("zone", "")).split("@")[0]
         path = self.path.split("?")[0]
+        if path == "/spotify/sync":
+            with LOCK:
+                if SYNC["reads"] is None:
+                    SYNC["reads"] = 0
+            self.reply(202, spotify_status())
+            return
+        if path in ("/play", "/dj/start", "/dj/skip", "/dj/stop"):
+            with LOCK:
+                POSTS.append({"path": path, "body": body})
+            self.reply(200, {"done": "ok " + path, "changed": True})
+            return
+        room = str(body.get("zone", "")).split("@")[0]
         if room not in PENDING or path not in ("/resume", "/pause"):
             self.reply(404, {"detail": "not found", "code": "NOT_FOUND"})
             return

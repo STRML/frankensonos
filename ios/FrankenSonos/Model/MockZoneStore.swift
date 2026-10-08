@@ -86,6 +86,16 @@ final class MockZoneStore: ZoneStore {
         zones.first(where: { $0.id == zoneID })?.roomNames.forEach { finishVolume(room: $0) }
     }
     func isOffline(_ zone: AudioZone) -> Bool { zone.roomNames.contains { offlineRooms.contains($0) } }
+    /// The daemon connection the Spotify library reads through; nil in the mock.
+    var daemonClient: DaemonClient? { liveStore?.client }
+    func playSpotify(uri: String, title: String) {
+        liveStore?.selectedZoneID = selectedZoneID
+        liveStore?.playSpotify(uri: uri, title: title)
+    }
+    func dj(_ action: String) {
+        liveStore?.selectedZoneID = selectedZoneID
+        liveStore?.dj(action)
+    }
     func changeDaemonURL(_ value: String) -> Bool {
         guard let url = DaemonSettings.validated(value) else { return false }
         DaemonSettings.urlString = url.absoluteString

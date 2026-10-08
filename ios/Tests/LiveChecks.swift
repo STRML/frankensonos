@@ -108,6 +108,67 @@ final class LiveChecks: XCTestCase {
             try require(shown(stuck), "the tap did not show playing")
             try await wait("gives up on a speaker that never plays", seconds: 12) { !shown(stuck) }
         }
+        await check(23, "Spotify: sync to completion, then albums, search, album tracks and liked tracks") {
+            let model = SpotifyModel(client: DaemonClient(baseURL: stubURL))
+            await model.load()
+            try require(model.phase == .empty, "signed in with an empty library should offer a sync, got \(model.phase)")
+            await model.sync()
+            try require(model.phase == .ready, "after the sync the library should be ready, got \(model.phase)")
+            try require(model.albums.map(\.title) == ["Bach: Goldberg Variations, BWV 988", "Kind of Blue"], "albums: \(model.albums.map(\.title))")
+            try require(model.albumsTotal == 2 && model.likedTotal == 2, "totals \(model.albumsTotal) \(model.likedTotal)")
+            try require(model.albums[0].artUrl?.absoluteString == "https://cdn.example.invalid/bach.jpg", "art url lost")
+            try require(model.albums[1].artUrl == nil, "an album without art must stay without")
+            await model.search("miles")
+            try require(model.albums.map(\.artist) == ["Miles Davis"], "search kept \(model.albums.map(\.artist))")
+            await model.search("")
+            try require(model.albums.count == 2, "clearing the search should restore the list")
+            let tracks = await model.tracks(for: model.albums[0])
+            try require(tracks.map(\.title) == ["Aria", "Variation 1", "Variation 2"], "tracks \(tracks.map(\.title))")
+            try require(tracks[0].durationText == "3:03", "duration \(tracks[0].durationText)")
+            try require(model.liked.map(\.title) == ["Aria", "Blue in Green"] && model.liked[1].artistLine == "Miles Davis, Bill Evans", "liked tracks")
+        }
+        await check(24, "Spotify: the real not-configured status explains itself, other states are told apart") {
+            var status = try JSONDecoder().decode(SpotifyStatus.self, from: fixture("spotify-status-unconfigured.json"))
+            try require(SpotifyModel.phase(status: status, unreachable: nil, albums: 0) == .notConfigured, "unconfigured")
+            status.configured = true
+            try require(SpotifyModel.phase(status: status, unreachable: nil, albums: 0) == .signedOut(reauthorize: false), "configured, not signed in")
+            status.reauthorize = true
+            try require(SpotifyModel.phase(status: status, unreachable: nil, albums: 0) == .signedOut(reauthorize: true), "revoked")
+            status.signedIn = true
+            status.reauthorize = false
+            try require(SpotifyModel.phase(status: status, unreachable: nil, albums: 0) == .empty, "signed in, no library")
+            try require(SpotifyModel.phase(status: status, unreachable: nil, albums: 3) == .ready, "signed in with a library")
+            try require(SpotifyModel.phase(status: nil, unreachable: "timed out", albums: 0) == .unreachable("timed out"), "daemon unreachable")
+            try require(SpotifyModel.phase(status: nil, unreachable: nil, albums: 0) == .loading, "first load")
+        }
+        await check(25, "Spotify: play and the DJ go to the selected room with what the app promised") {
+            let house = LiveZoneStore(baseURL: stubURL)
+            house.start()
+            defer { house.setActive(false) }
+            try await wait("stub house", seconds: 12) { house.zones.count == 2 && house.connectionStatus == .live }
+            let id = house.zones.first { $0.roomNames == ["Lag Room"] }!.id
+            house.selectedZoneID = id
+            house.playSpotify(uri: "spotify:album:a1", title: "Bach: Goldberg Variations, BWV 988")
+            try require(house.zones.first { $0.id == id }!.isPlaying, "playing a Spotify album should show playing at once")
+            house.dj("start")
+            house.dj("skip")
+            house.dj("stop")
+            try await wait("posts reach the daemon", seconds: 6) { true }
+            var posts: [[String: Any]] = []
+            for _ in 0..<60 {
+                let (data, _) = try await URLSession.shared.data(from: stubURL.appendingPathComponent("_debug/posts"))
+                posts = (try JSONSerialization.jsonObject(with: data) as? [[String: Any]]) ?? []
+                if posts.count >= 4 { break }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            let paths = posts.compactMap { $0["path"] as? String }
+            try require(paths == ["/play", "/dj/start", "/dj/skip", "/dj/stop"], "posted \(paths)")
+            let play = posts[0]["body"] as? [String: Any]
+            try require(play?["source_uri"] as? String == "spotify:album:a1", "source_uri \(String(describing: play))")
+            try require(play?["title"] as? String == "Bach: Goldberg Variations, BWV 988", "title")
+            try require((play?["zone"] as? String)?.hasPrefix("Lag Room") == true, "zone \(String(describing: play?["zone"]))")
+            try require((posts[1]["body"] as? [String: Any])?["zone"] as? String == play?["zone"] as? String, "the DJ must act on the same room")
+        }
         await check(1, "unreachable launch stays empty/offline, then bootstraps") {
             try await control("stop")
             store.start()

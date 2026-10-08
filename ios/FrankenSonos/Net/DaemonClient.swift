@@ -25,6 +25,25 @@ final class DaemonClient {
         return try await get(components.url!)
     }
 
+    func spotifyStatus() async throws -> SpotifyStatus { try await get(url("spotify/status")) }
+    func spotifySync() async throws { try await command("spotify/sync", body: [:]) }
+    func spotifyAlbums(offset: Int, limit: Int, query: String) async throws -> SpotifyPage<SpotifyAlbum> {
+        try await get(libraryURL("spotify/albums", offset: offset, limit: limit, query: query))
+    }
+    func spotifyLiked(offset: Int, limit: Int, query: String) async throws -> SpotifyPage<SpotifyTrack> {
+        try await get(libraryURL("spotify/tracks", offset: offset, limit: limit, query: query))
+    }
+    func spotifyAlbumTracks(id: String) async throws -> [SpotifyTrack] {
+        try await get(url("spotify/albums/\(id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? id)/tracks"))
+    }
+    private func libraryURL(_ path: String, offset: Int, limit: Int, query: String) -> URL {
+        var components = URLComponents(url: url(path), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "offset", value: String(offset)), URLQueryItem(name: "limit", value: String(limit))]
+            + (query.isEmpty ? [] : [URLQueryItem(name: "q", value: query)])
+        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        return components.url!
+    }
+
     func command(_ path: String, body: [String: Any]) async throws {
         var request = URLRequest(url: url(path))
         request.httpMethod = "POST"

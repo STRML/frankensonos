@@ -64,23 +64,35 @@ extension LiveZoneStore {
 
     /// `confirm` names a zone whose transport the user just changed: its state is re-read a few times until the speaker
     /// agrees, because the live stream may be off or late and the speaker takes a moment to settle.
-    private func send(_ path: String, room: String, extra: [String: Any] = [:], confirm: UUID? = nil, revert: @escaping () -> Void = {}) {
+    func send(_ path: String, room: String, extra: [String: Any] = [:], confirm: UUID? = nil, revert: @escaping () -> Void = {}) {
         guard !offlineRooms.contains(room) else { revert(); return }
         let id = UUID()
-        commandTasks[id] = Task { [weak self] in
-            guard let self else { return }
-            defer { self.commandTasks[id] = nil }
+        let outcome = CommandOutcome()
+        // The POSTs for one room run in the order they were tapped: independent tasks could reach the daemon out of
+        // order, and a start tapped before a stop must not land after it. Only the POST is chained, so a command never
+        // waits for an earlier one's confirmation polling.
+        let previous = commandChain[room]
+        let post = Task { [weak self] in
+            await previous?.value
+            guard let self, !Task.isCancelled else { return }
             do {
                 var body = extra
                 body["zone"] = self.target(room)
                 try await self.client.command(path, body: body)
+                outcome.sent = true
             } catch {
                 guard !Task.isCancelled else { return }
                 revert()
                 self.showFailure(error)
                 if ((error as? DaemonFailure)?.status ?? 500) >= 500 { try? await self.refetch(room: room) }
-                return
             }
+        }
+        commandChain[room] = post
+        commandTasks[id] = Task { [weak self] in
+            await post.value
+            guard let self else { return }
+            defer { self.commandTasks[id] = nil }
+            guard outcome.sent, !Task.isCancelled else { return }
             do { try await self.refetch(room: room) }
             catch { if !Task.isCancelled { self.scheduleState(room: room) } }
             guard let zoneID = confirm else { return }
@@ -207,4 +219,9 @@ extension LiveZoneStore {
         zones = result
         selectedZoneID = id
     }
+}
+
+/// Whether a command's POST reached the daemon, shared between the task that sends it and the one that follows up.
+final class CommandOutcome {
+    var sent = false
 }

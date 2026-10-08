@@ -4,6 +4,7 @@ struct BrowseView: View {
     @EnvironmentObject private var store: MockZoneStore
     var openPlayer: () -> Void = {}
     @ScaledMetric private var rowHeight = 56.0
+    @State private var liveSource = "Favorites"
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
@@ -13,12 +14,21 @@ struct BrowseView: View {
                 }
                 .padding(.horizontal, 16).frame(height: 40)
                 if store.isLive {
-                    Text("Favorites").s1Font(18, weight: .semibold).padding(16)
-                    ForEach(store.tracks) { track in
-                        SongRow(track: track) { store.selectTrack(track, in: store.selectedZoneID); openPlayer() }
-                            .disabled(store.isOffline(store.selectedZone))
+                    Picker("Source", selection: $liveSource) {
+                        Text("Favorites").tag("Favorites")
+                        Text("Spotify").tag("Spotify")
                     }
-                    if store.tracks.isEmpty { Text("No favorites").s1Font(13).foregroundStyle(.secondary).padding(16) }
+                    .pickerStyle(.segmented).padding(.horizontal, 16).padding(.bottom, 8)
+                    if liveSource == "Spotify" {
+                        SpotifyBrowse(openPlayer: openPlayer)
+                    } else {
+                        Text("Favorites").s1Font(18, weight: .semibold).padding(16)
+                        ForEach(store.tracks) { track in
+                            SongRow(track: track) { store.selectTrack(track, in: store.selectedZoneID); openPlayer() }
+                                .disabled(store.isOffline(store.selectedZone))
+                        }
+                        if store.tracks.isEmpty { Text("No favorites").s1Font(13).foregroundStyle(.secondary).padding(16) }
+                    }
                 } else if let source = store.browseSource {
                     if source.name == "TV" {
                         VStack(spacing: 16) {
