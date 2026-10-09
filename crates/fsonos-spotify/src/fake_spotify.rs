@@ -35,6 +35,8 @@ pub fn runtime() -> Runtime {
 pub struct Fake {
     pub base: String,
     pub expected_challenge: Option<String>,
+    pub expected_redirect: Option<String>,
+    pub token_delay: Duration,
     pub access: String,
     pub refresh: String,
     pub refreshes: usize,
@@ -63,8 +65,18 @@ fn token_json(access: &str, refresh: Option<&str>) -> Response {
 }
 
 fn respond(fake: &Mutex<Fake>, req: &Request) -> Response {
+    if req.method == Method::Post && req.uri == "/api/token" {
+        let delay = {
+            let mut fake = fake.lock().unwrap();
+            fake.log.push(format!("{:?} {}", req.method, req.uri));
+            fake.token_delay
+        };
+        thread::sleep(delay);
+    }
     let mut fake = fake.lock().unwrap();
-    fake.log.push(format!("{:?} {}", req.method, req.uri));
+    if req.method != Method::Post || req.uri != "/api/token" {
+        fake.log.push(format!("{:?} {}", req.method, req.uri));
+    }
     if req.method == Method::Post && req.uri == "/api/token" {
         if let Some((status, body)) = &fake.token_error {
             return json(*status, body.clone());
@@ -84,7 +96,8 @@ fn respond(fake: &Mutex<Fake>, req: &Request) -> Response {
                 // from the authorize URL.
                 let challenge = get("code_verifier").map(|v| base64url(&sha256(v.as_bytes())));
                 if get("code") != Some("good-code")
-                    || get("redirect_uri") != Some(REDIRECT)
+                    || get("redirect_uri")
+                        != Some(fake.expected_redirect.as_deref().unwrap_or(REDIRECT))
                     || challenge != fake.expected_challenge
                 {
                     return json(400, r#"{"error":"invalid_grant"}"#);

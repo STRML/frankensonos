@@ -491,6 +491,7 @@ mod tests {
             mcp_http: None,
             spotify_client_id: None,
             spotify_redirect_uri: String::new(),
+            spotify_app_redirect_uri: fsonos_api::spotify::DEFAULT_APP_REDIRECT.into(),
             spotify_accounts_url: None,
             spotify_api_url: None,
             events_port: 0,

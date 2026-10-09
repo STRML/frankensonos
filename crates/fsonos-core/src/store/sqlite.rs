@@ -537,6 +537,14 @@ impl Store for SqliteStore {
         .map(drop)
     }
 
+    fn clear_spotify_library(&mut self) -> Result<(), StoreError> {
+        self.in_transaction(|c| {
+            c.execute_sync("DELETE FROM spotify_library")?;
+            c.execute_sync("DELETE FROM spotify_cache")?;
+            Ok(())
+        })
+    }
+
     fn save_render_params(
         &mut self,
         household: &str,

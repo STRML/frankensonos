@@ -318,6 +318,9 @@ pub trait Store {
     /// Replace the browse cache after a complete library read.
     fn save_spotify_cache(&mut self, cache: &SpotifyCache) -> Result<(), StoreError>;
 
+    /// Clear the previous account's library and browse snapshot.
+    fn clear_spotify_library(&mut self) -> Result<(), StoreError>;
+
     /// Remember the Spotify render parameters learned for `household`.
     fn save_render_params(
         &mut self,
@@ -551,6 +554,12 @@ impl Store for MemStore {
 
     fn save_spotify_cache(&mut self, cache: &SpotifyCache) -> Result<(), StoreError> {
         self.spotify_cache = cache.clone();
+        Ok(())
+    }
+
+    fn clear_spotify_library(&mut self) -> Result<(), StoreError> {
+        self.library.clear();
+        self.spotify_cache = SpotifyCache::default();
         Ok(())
     }
 

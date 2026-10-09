@@ -108,6 +108,10 @@ fn openapi_document(entries: &[RouteEntry]) -> String {
         spec["paths"]["/auth/spotify/callback"]["get"]["responses"][status]["content"] =
             serde_json::json!({"text/html": {"schema": {"type": "string"}}});
     }
+    let art = &mut spec["paths"]["/art"]["get"]["responses"]["200"];
+    art["content"] =
+        serde_json::json!({"image/*": {"schema": {"type": "string", "format": "binary"}}});
+    art["headers"] = serde_json::json!({"Cache-Control": {"schema": {"type": "string"}, "description": "public, max-age=86400"}});
     serde_json::to_string(&spec).unwrap()
 }
 
@@ -125,6 +129,7 @@ fn routes(cx: &Ctx<'_>) -> Vec<RouteEntry> {
     routes.extend(controls(cx));
     routes.extend(house_verbs(cx));
     routes.extend(spotify(cx));
+    routes.push(art(cx));
     routes
 }
 
@@ -165,9 +170,37 @@ fn spotify_auth(cx: &Ctx<'_>) -> Vec<RouteEntry> {
     ]
 }
 
+fn spotify_exchange(cx: &Ctx<'_>) -> RouteEntry {
+    cx.async_route(
+        &Op::post(
+            "/auth/spotify/exchange",
+            "spotify_exchange",
+            "spotify",
+            "Complete app Spotify sign-in",
+        ),
+        |surface, caller, cx, req| {
+            let input = serde_json::from_slice::<crate::spotify::ExchangeRequest>(
+                &req.take_body().into_bytes(),
+            )
+            .map_err(|_| {
+                Failure::invalid("exchange requires code, code_verifier and redirect_uri strings")
+            });
+            Box::pin(async move {
+                match input {
+                    Ok(input) => surface.spotify_exchange(&cx, &caller, input).await,
+                    Err(err) => crate::failure::http_error(&err, 400, false),
+                }
+            })
+        },
+    )
+    .request_schema::<crate::spotify::ExchangeRequest>(true)
+    .response_schema::<crate::spotify::ExchangeDto>(200, "Signed in")
+}
+
 fn spotify(cx: &Ctx<'_>) -> Vec<RouteEntry> {
     use crate::spotify::{AlbumsDto, StatusDto, SyncDto, TrackDto, TracksDto};
     let mut entries = spotify_auth(cx);
+    entries.push(spotify_exchange(cx));
     entries.extend(vec![
         cx.route(
             &Op::get(
@@ -249,6 +282,44 @@ fn spotify(cx: &Ctx<'_>) -> Vec<RouteEntry> {
         .response_schema::<TracksDto>(200, "Liked tracks"),
     ]);
     entries
+}
+
+#[derive(JsonSchema)]
+struct ArtQuery {
+    player: String,
+    u: String,
+}
+
+fn art(cx: &Ctx<'_>) -> RouteEntry {
+    cx.async_route(
+        &Op::get(
+            "/art",
+            "get_art",
+            "art",
+            "Read artwork from a discovered speaker",
+        ),
+        |surface, caller, cx, req| {
+            let input = (|| {
+                Ok::<_, Failure>(ArtQuery {
+                    player: query_param(req, "player")?
+                        .ok_or_else(|| Failure::invalid("player is required"))?,
+                    u: query_param(req, "u")?.ok_or_else(|| Failure::invalid("u is required"))?,
+                })
+            })();
+            Box::pin(async move {
+                match input {
+                    Ok(q) => surface.art(&cx, &caller, &q.player, &q.u).await,
+                    Err(_) => crate::failure::http_error(
+                        &Failure::invalid("invalid art query"),
+                        400,
+                        false,
+                    ),
+                }
+            })
+        },
+    )
+    .query_schema::<ArtQuery>(true)
+    .response_schema::<String>(200, "Image bytes; cache-control: public, max-age=86400")
 }
 
 #[derive(JsonSchema, Serialize)]
@@ -596,6 +667,35 @@ impl Ctx<'_> {
                 work(&surface, &client, req)
             }),
         )
+    }
+
+    fn async_route<F>(&self, op: &Op, work: F) -> RouteEntry
+    where
+        F: Fn(Arc<Surface>, Client, asupersync::Cx, &mut Request) -> BoxFuture<'static, Response>
+            + Send
+            + Sync
+            + 'static,
+    {
+        let surface = Arc::clone(self.surface);
+        let identity = self.identity.clone();
+        let web = Arc::clone(self.web);
+        let write = op.method == Method::Post;
+        let route = Route::new(op.method, op.path)
+            .operation_id(op.id)
+            .summary(op.summary)
+            .tag(op.tag);
+        let entry = RouteEntry::from_route(route, move |ctx, req| {
+            if let Err(err) = web.admit(req, write) {
+                return Box::pin(ready(err.http_response())) as BoxFuture<'_, Response>;
+            }
+            work(
+                Arc::clone(&surface),
+                identity.of(req),
+                ctx.cx().clone(),
+                req,
+            )
+        });
+        error_answers(entry, write)
     }
 
     /// A control route: parse the JSON body as `B`, plan it, carry it out.

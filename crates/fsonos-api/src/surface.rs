@@ -782,7 +782,15 @@ impl Surface {
         let target = resolve(room_view(&households, aliases.as_ref(), client), zone)
             .map_err(|f| self.explain(f))?;
         let listed = favorites::list(&*self.transport, &households, &target.coordinator.id)?;
-        Ok(listed.iter().map(FavoriteDto::from).collect())
+        Ok(listed
+            .iter()
+            .map(|favorite| {
+                let mut dto = FavoriteDto::from(favorite);
+                dto.art_uri =
+                    crate::art::normalize(favorite.art_uri.as_deref(), target.coordinator);
+                dto
+            })
+            .collect())
     }
 
     /// What `zone` is doing right now (`get_zone_state`): its group, the
@@ -796,7 +804,7 @@ impl Surface {
         let heard = |p: &PlayerId| self.live().and_then(|live| live.player(p));
         // The group's transport and track, from its events when it has
         // reported them, else asked.
-        let (state, track) = match heard(&target.coordinator.id) {
+        let (state, mut track) = match heard(&target.coordinator.id) {
             Some(group) if group.transport.is_some() => (
                 group.transport.unwrap_or(TransportState::Unknown),
                 crate::live::track(&group, Instant::now()),
@@ -812,6 +820,9 @@ impl Surface {
                 )
             }
         };
+        if let Some(track) = &mut track {
+            track.art_url = crate::art::normalize(track.art_url.as_deref(), target.coordinator);
+        }
         let volume = heard(&target.player.id)
             .and_then(|room| room.volume)
             .or_else(|| control::volume(&*self.transport, &households, &target.player.id).ok());

@@ -220,6 +220,14 @@ pub struct ServeArgs {
     )]
     pub spotify_redirect_uri: String,
 
+    /// Registered callback URI for Spotify sign-in from the phone app.
+    #[arg(
+        long,
+        env = "FSONOS_SPOTIFY_APP_REDIRECT_URI",
+        default_value = "frankensonos://spotify-callback"
+    )]
+    pub spotify_app_redirect_uri: String,
+
     /// Accounts base URL override for tests and fakes only.
     #[arg(long, env = "FSONOS_SPOTIFY_ACCOUNTS_URL")]
     pub spotify_accounts_url: Option<String>,

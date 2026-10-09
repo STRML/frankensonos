@@ -8,10 +8,10 @@ use fastapi::{JsonSchema, Response, ResponseBody, StatusCode, fastapi_openapi};
 use fsonos_core::store::{LibraryEntry, SpotifyAlbum, SpotifyCache};
 use fsonos_spotify::SpotifyError;
 use fsonos_spotify::cache::apply_library_read;
-use fsonos_spotify::client::{AUTHORIZE_URL, Endpoints, SpotifyConfig, TokenCache};
+use fsonos_spotify::client::{AUTHORIZE_URL, Endpoints, Pkce, SpotifyConfig, TokenCache};
 use fsonos_spotify::library::{LibraryRead, split_artists};
 use fsonos_spotify::session::{PendingAuthorization, Session};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -45,6 +45,9 @@ pub struct LibraryDto {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct StatusDto {
     pub configured: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    pub app_redirect_uri: String,
     pub signed_in: bool,
     pub reauthorize: bool,
     pub library: LibraryDto,
@@ -156,7 +159,46 @@ pub struct Spotify {
     cache: TokenCache,
     endpoints: Endpoints,
     accounts: Option<String>,
+    app_redirect_uri: String,
     state: Mutex<State>,
+}
+
+pub const DEFAULT_APP_REDIRECT: &str = "frankensonos://spotify-callback";
+
+#[derive(Deserialize, JsonSchema)]
+pub struct ExchangeRequest {
+    pub code: String,
+    pub code_verifier: String,
+    pub redirect_uri: String,
+}
+
+#[derive(Serialize, JsonSchema)]
+pub struct ExchangeDto {
+    pub signed_in: bool,
+}
+
+struct Authorizing<'a>(&'a Spotify);
+impl Drop for Authorizing<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.0.state.lock() {
+            state.authorizing = false;
+        }
+    }
+}
+
+fn validate_exchange(input: &ExchangeRequest, redirect: &str) -> Result<Pkce, Failure> {
+    if input.redirect_uri != redirect {
+        return Err(Failure::new(
+            ErrorCode::SpotifyRedirectNotAllowed,
+            "Spotify app redirect is not allowed.",
+        ));
+    }
+    if input.code.is_empty() || input.code.len() > 512 {
+        return Err(Failure::invalid("code must contain 1 to 512 bytes"));
+    }
+    Pkce::from_verifier(input.code_verifier.clone()).map_err(|_| {
+        Failure::invalid("code_verifier must be 43 to 128 unreserved ASCII characters")
+    })
 }
 
 impl Spotify {
@@ -165,6 +207,7 @@ impl Spotify {
         data_dir: &Path,
         endpoints: Endpoints,
         accounts: Option<String>,
+        app_redirect_uri: String,
     ) -> Result<Arc<Self>, Failure> {
         if let Some(config) = &config {
             config
@@ -178,6 +221,7 @@ impl Spotify {
             cache,
             endpoints,
             accounts,
+            app_redirect_uri,
             state: Mutex::new(State {
                 signed_in,
                 ..State::default()
@@ -259,6 +303,80 @@ impl Spotify {
         }
     }
 
+    async fn exchange(&self, cx: &Cx, input: ExchangeRequest, store: SharedStore) -> Response {
+        let Some(config) = self.config.clone() else {
+            return not_configured().http_response();
+        };
+        let pkce = match validate_exchange(&input, &self.app_redirect_uri) {
+            Ok(pkce) => pkce,
+            Err(err) => return crate::failure::http_error(&err, 400, false),
+        };
+        {
+            let Ok(mut state) = self.state.lock() else {
+                return internal().http_response();
+            };
+            if state
+                .pending
+                .as_ref()
+                .is_some_and(|p| p.at.elapsed() >= Duration::from_secs(600))
+            {
+                state.pending = None;
+            }
+            if state.authorizing || state.sync.running || state.pending.is_some() {
+                return crate::failure::http_error(&busy(), 409, true);
+            }
+            state.authorizing = true;
+        }
+        let _authorizing = Authorizing(self);
+        let result = async {
+            let mut session =
+                Session::open(config, self.cache.clone(), Client::default_for_runtime(cx))?
+                    .with_endpoints(self.endpoints.clone());
+            session
+                .exchange_code(cx, &input.code, &pkce, &input.redirect_uri)
+                .await?;
+            store
+                .lock()
+                .map_err(|_| SpotifyError::Config("store unavailable".into()))?
+                .clear_spotify_library()?;
+            Ok::<_, SpotifyError>(())
+        }
+        .await;
+        let Ok(mut state) = self.state.lock() else {
+            return internal().http_response();
+        };
+        match result {
+            Ok(()) => {
+                state.signed_in = true;
+                state.reauthorize = false;
+                state.sync = SyncDto::default();
+                Response::json(&ExchangeDto { signed_in: true })
+                    .expect("ExchangeDto serializes")
+                    .header("cache-control", b"no-store".to_vec())
+            }
+            Err(err) => {
+                if matches!(err, SpotifyError::Io(_) | SpotifyError::Store(_)) {
+                    state.signed_in = false;
+                }
+                let (status, retryable) = match err {
+                    SpotifyError::Auth(_) => (400, false),
+                    SpotifyError::Http(_) | SpotifyError::Api { .. } | SpotifyError::Decode(_) => {
+                        (502, true)
+                    }
+                    _ => (500, false),
+                };
+                crate::failure::http_error(
+                    &Failure::new(
+                        ErrorCode::SpotifyAuthRequired,
+                        safe_error(&err, self.cache.path()),
+                    ),
+                    status,
+                    retryable,
+                )
+            }
+        }
+    }
+
     fn run_session<T>(
         &self,
         work: impl for<'a> AsyncFnOnce(&'a mut Session, &'a Cx) -> Result<T, SpotifyError>,
@@ -325,6 +443,8 @@ impl Spotify {
         let state = self.state.lock().map_err(|_| internal())?;
         Ok(StatusDto {
             configured: self.config.is_some(),
+            client_id: self.config.as_ref().map(|config| config.client_id.clone()),
+            app_redirect_uri: self.app_redirect_uri.clone(),
             signed_in: state.signed_in,
             reauthorize: state.reauthorize,
             library: library_status(cache),
@@ -443,6 +563,7 @@ fn busy() -> Failure {
         ErrorCode::NotReady,
         "Spotify is busy; retry after sync or sign-in finishes.",
     )
+    .with_hint("Wait for Spotify sign-in or sync to finish, then retry.")
 }
 fn internal() -> Failure {
     Failure::new(ErrorCode::Internal, "Spotify worker unavailable.")
@@ -534,6 +655,24 @@ impl crate::Surface {
         }
     }
 
+    pub(crate) async fn spotify_exchange(
+        &self,
+        cx: &Cx,
+        client: &fsonos_core::policy::Client,
+        input: ExchangeRequest,
+    ) -> Response {
+        if let Err(err) = self.spotify_admit(client, "spotify_exchange", false, false) {
+            return err.http_response();
+        }
+        let Some(spotify) = &self.spotify else {
+            return not_configured().http_response();
+        };
+        let Some(store) = self.spotify_store() else {
+            return internal().http_response();
+        };
+        spotify.exchange(cx, input, store).await
+    }
+
     pub(crate) fn spotify_status(
         &self,
         client: &fsonos_core::policy::Client,
@@ -544,6 +683,8 @@ impl crate::Surface {
             Some(spotify) => spotify.status(&cache),
             None => Ok(StatusDto {
                 configured: false,
+                client_id: None,
+                app_redirect_uri: DEFAULT_APP_REDIRECT.into(),
                 signed_in: false,
                 reauthorize: false,
                 library: library_status(&cache),
@@ -684,6 +825,73 @@ impl crate::Surface {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_verifier_and_code_boundaries_are_validated_without_echoing_input() {
+        for verifier in ["a".repeat(43), "b".repeat(128), "-._~".repeat(16)] {
+            for code in ["x".into(), "x".repeat(512)] {
+                let req = ExchangeRequest {
+                    code,
+                    code_verifier: verifier.clone(),
+                    redirect_uri: DEFAULT_APP_REDIRECT.into(),
+                };
+                assert!(validate_exchange(&req, DEFAULT_APP_REDIRECT).is_ok());
+            }
+        }
+        for verifier in [
+            "a".repeat(42),
+            "a".repeat(129),
+            "é".repeat(43),
+            format!("{}!", "a".repeat(43)),
+        ] {
+            let req = ExchangeRequest {
+                code: "private-code".into(),
+                code_verifier: verifier.clone(),
+                redirect_uri: DEFAULT_APP_REDIRECT.into(),
+            };
+            let err = validate_exchange(&req, DEFAULT_APP_REDIRECT).unwrap_err();
+            assert_eq!(err.code, ErrorCode::InvalidArgument);
+            assert!(!err.detail.contains(&verifier));
+            assert!(!err.detail.contains("private-code"));
+        }
+        for code in [String::new(), "x".repeat(513)] {
+            let req = ExchangeRequest {
+                code,
+                code_verifier: "a".repeat(43),
+                redirect_uri: DEFAULT_APP_REDIRECT.into(),
+            };
+            assert_eq!(
+                validate_exchange(&req, DEFAULT_APP_REDIRECT)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::InvalidArgument
+            );
+        }
+    }
+
+    #[test]
+    fn status_reports_configured_app_redirect_and_client_id() {
+        let data_dir = fsonos_spotify::fake_spotify::scratch_dir("status-pure");
+        for configured in [false, true] {
+            let spotify = Spotify::new(
+                configured.then(fsonos_spotify::fake_spotify::config),
+                &data_dir,
+                Endpoints::default(),
+                None,
+                "frankensonos://custom-callback".into(),
+            )
+            .unwrap();
+            let status =
+                serde_json::to_value(spotify.status(&SpotifyCache::default()).unwrap()).unwrap();
+            assert_eq!(status["app_redirect_uri"], "frankensonos://custom-callback");
+            if configured {
+                assert_eq!(status["client_id"], fsonos_spotify::fake_spotify::CLIENT_ID);
+            } else {
+                assert!(status.get("client_id").is_none());
+            }
+            assert_eq!(status["signed_in"], false);
+        }
+    }
 
     #[test]
     fn authorization_expires_after_ten_minutes_and_is_consumed() {

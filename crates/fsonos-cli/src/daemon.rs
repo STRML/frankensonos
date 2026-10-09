@@ -218,6 +218,7 @@ pub fn run(global: &GlobalArgs, args: &ServeArgs) -> anyhow::Result<()> {
         &data_dir,
         endpoints,
         args.spotify_accounts_url.clone(),
+        args.spotify_app_redirect_uri.clone(),
     )?;
     let checks = args.clone();
     let (surface, live) = live_surface(global, args.events_port, policy(&data_dir)?)?;

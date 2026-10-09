@@ -68,6 +68,7 @@ variables. The environment form is what launchd uses.
 | Direct-seed list | `FSONOS_SEEDS` | unset | Optional file of player addresses for flaky-SSDP networks; every IP address in it is tried (e.g. TOML `players = ["192.0.2.10"]`, or one per line). Every command also takes `--seed <ip>`. Keep the file under `local/` or outside the repo. |
 | Routes file | `FSONOS_ROUTES` | unset | Only for `fsonos sim`: maps the virtual players' advertised addresses to the loopback sockets that serve them, plus the simulator's SSDP target. `fsonos sim` writes it; real players need none. While it is set, `fsonos` reaches nothing the file does not name (other addresses and multicast are refused). |
 | Spotify client id | `FSONOS_SPOTIFY_CLIENT_ID` | unset | Needed for Spotify sign-in, library browsing and the DJ (see §5). |
+| Spotify app redirect URI | `FSONOS_SPOTIFY_APP_REDIRECT_URI` | `frankensonos://spotify-callback` | `--spotify-app-redirect-uri`; register this exact URI for phone sign-in. |
 | Spotify accounts base | `FSONOS_SPOTIFY_ACCOUNTS_URL` | unset | Tests and fakes only; overrides the accounts base, including authorization and token exchange. |
 | Spotify API base | `FSONOS_SPOTIFY_API_URL` | unset | Tests and fakes only; overrides the Web API base, including `/v1`. |
 | Spotify redirect URI | `FSONOS_SPOTIFY_REDIRECT_URI` | `http://127.0.0.1:8099/auth/spotify/callback` | Must match the URI registered for your Spotify app. |
@@ -383,3 +384,20 @@ curl -fsS https://<mac>.<tailnet>.ts.net/health                  # from another 
 | The log shows bind failures ("Can't assign requested address") right after boot | A tailnet address set in `FSONOS_HTTP_ADDR`, bound before Tailscale was up. It self-heals via `KeepAlive`; prefer Serve, or leave the address unset. |
 | `launchctl bootstrap` fails with an I/O or permission error | Plist not `root:wheel` `0644`, or the job is already loaded. Run `bootout` first. |
 | Tailnet clients time out but loopback works | Run `fsonos doctor --only tailscale` on the Mac: it says whether Tailscale is up and whether the daemon listens on the tailnet. If both pass, the tailnet policy doesn't grant the port, or Serve isn't configured (`tailscale serve status`). |
+
+### Phone Spotify sign-in and speaker artwork
+
+Register `frankensonos://spotify-callback` alongside the loopback callback in
+Spotify's dashboard. `FSONOS_SPOTIFY_APP_REDIRECT_URI` (or
+`--spotify-app-redirect-uri`) changes the app callback. `GET /spotify/status`
+returns `client_id` when configured and `app_redirect_uri`. The app completes
+PKCE consent and posts `code`, `code_verifier` and the exact `redirect_uri` to
+`POST /auth/spotify/exchange`. Tokens stay on the daemon. A successful exchange
+clears the previous account's library and browse cache; run `POST /spotify/sync`
+for the new account.
+
+Add `spotify_exchange` and `get_art` to the existing NAS caller's allow list,
+preserving the status, sync, browse and playback ids already allowed. Exchange
+is available to policy-approved LAN and tailnet callers. The existing login
+and callback routes still require loopback. `GET /art` accepts a discovered
+player id and its `/getaa` path; the daemon fetches only that player's port 1400.

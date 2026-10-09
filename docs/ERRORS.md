@@ -57,6 +57,9 @@ succeed.
 
 | `SPOTIFY_NOT_CONFIGURED` | 503 | 1 | no | Spotify sign-in has no configured app client id. | Set FSONOS_SPOTIFY_CLIENT_ID and register the redirect URI in the Spotify dashboard. |
 | `FORBIDDEN_NOT_LOOPBACK` | 403 | 5 | no | Spotify sign-in requires a loopback caller. | Open the sign-in page through an SSH tunnel to the daemon's loopback listener. |
+| `SPOTIFY_REDIRECT_NOT_ALLOWED` | 400 | 2 | no | App callback differs from configuration. | Use app_redirect_uri from GET /spotify/status. |
+| `UNKNOWN_PLAYER` | 404 | 3 | no | Player id is not discovered. | List zones to find a discovered player. |
+| `BAD_ART` | 502 | 1 | no | Speaker returned invalid or oversized artwork. | Keep the generated cover until the speaker reports valid artwork. |
 
 ## Notes
 
@@ -66,3 +69,9 @@ A successful response can carry notes about how the request was carried out.
 |---|---|
 | `VOLUME_CLAMPED` | The requested volume exceeded the house policy and was lowered. |
 | `HEALED` | The speakers had changed under the request (a player at a new address, or a new group coordinator) and it was retried once there. Only commands that are safe to repeat are retried at a new address. |
+
+Exchange and artwork input failures use `400 INVALID_ARGUMENT`. Exchange busy
+answers 409; upstream failures use 502 with `retryable: true`. A token-cache
+write failure names the cache path and answers 500. A speaker artwork timeout
+or connection failure answers 502 with `retryable: true`; its 404 is passed
+through without a cache header.

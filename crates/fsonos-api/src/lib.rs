@@ -26,6 +26,7 @@
 //! * [`dj`] — the DJ engine a surface runs `dj_*` commands with;
 //! * [`failure`] — the one [`Failure`] shape (status + agent-readable detail).
 
+mod art;
 pub mod dj;
 pub mod events;
 pub mod execute;

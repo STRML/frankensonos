@@ -155,10 +155,21 @@ impl SpotifyConfig {
     /// Body for `POST` [`TOKEN_URL`] exchanging the callback's `code`.
     #[must_use]
     pub fn code_exchange_body(&self, code: &str, pkce: &Pkce) -> String {
+        self.code_exchange_body_with_redirect(code, pkce, &self.redirect_uri)
+    }
+
+    /// Exchange an app's PKCE code using its registered redirect.
+    #[must_use]
+    pub fn code_exchange_body_with_redirect(
+        &self,
+        code: &str,
+        pkce: &Pkce,
+        redirect_uri: &str,
+    ) -> String {
         form_encode(&[
             ("grant_type", "authorization_code"),
             ("code", code),
-            ("redirect_uri", &self.redirect_uri),
+            ("redirect_uri", redirect_uri),
             ("client_id", &self.client_id),
             ("code_verifier", &pkce.verifier),
         ])
@@ -1050,6 +1061,34 @@ mod tests {
         }
         // The URL-safe alphabet: 62 → '-', 63 → '_'.
         assert_eq!(base64url(&[0xfb, 0xff]), "-_8");
+    }
+
+    #[test]
+    fn app_exchange_body_uses_supplied_redirect_and_encodes_secrets() {
+        let config = SpotifyConfig {
+            client_id: "app123".into(),
+            redirect_uri: "http://127.0.0.1:8099/callback".into(),
+        };
+        let pkce = Pkce::from_verifier("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk").unwrap();
+        let pairs = parse_query(&config.code_exchange_body_with_redirect(
+            "code+&=",
+            &pkce,
+            "frankensonos://spotify-callback",
+        ))
+        .unwrap();
+        assert_eq!(
+            pairs,
+            vec![
+                ("grant_type".into(), "authorization_code".into()),
+                ("code".into(), "code+&=".into()),
+                (
+                    "redirect_uri".into(),
+                    "frankensonos://spotify-callback".into()
+                ),
+                ("client_id".into(), "app123".into()),
+                ("code_verifier".into(), pkce.verifier)
+            ]
+        );
     }
 
     #[test]

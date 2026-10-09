@@ -144,6 +144,33 @@ impl Session {
         Ok(())
     }
 
+    /// Finish an app-started PKCE flow; the caller validates its redirect and state.
+    pub async fn exchange_code(
+        &mut self,
+        cx: &Cx,
+        code: &str,
+        pkce: &Pkce,
+        redirect_uri: &str,
+    ) -> Result<(), SpotifyError> {
+        let body = self
+            .config
+            .code_exchange_body_with_redirect(code, pkce, redirect_uri);
+        let response = self.send_token(cx, body).await?;
+        if response.status >= 500 || response.status == 429 {
+            return Err(SpotifyError::Api {
+                status: response.status,
+                body: "Spotify token endpoint unavailable".into(),
+            });
+        }
+        if !response.is_success() {
+            return Err(token_error(response.status, &response.body));
+        }
+        let token = CachedToken::from_exchange(TokenResponse::parse(&response.body)?, unix_now())?;
+        self.cache.store(&token)?;
+        self.token = Some(token);
+        Ok(())
+    }
+
     /// A valid access token, refreshed (and re-cached) when it is about to
     /// expire.
     pub async fn access_token(&mut self, cx: &Cx) -> Result<String, SpotifyError> {
@@ -235,16 +262,23 @@ impl Session {
         Ok(())
     }
 
-    async fn post_token(&self, cx: &Cx, body: String) -> Result<TokenResponse, SpotifyError> {
-        let response = self
-            .http
+    async fn send_token(
+        &self,
+        cx: &Cx,
+        body: String,
+    ) -> Result<asupersync::http::Response, SpotifyError> {
+        self.http
             .post(self.endpoints.token.as_str())
             .header("Content-Type", FORM_CONTENT_TYPE)
             .body(body)
             .timeout(REQUEST_TIMEOUT)
             .send(cx)
             .await
-            .map_err(|e| SpotifyError::Http(e.to_string()))?;
+            .map_err(|e| SpotifyError::Http(e.to_string()))
+    }
+
+    async fn post_token(&self, cx: &Cx, body: String) -> Result<TokenResponse, SpotifyError> {
+        let response = self.send_token(cx, body).await?;
         if response.is_success() {
             TokenResponse::parse(&response.body)
         } else {
