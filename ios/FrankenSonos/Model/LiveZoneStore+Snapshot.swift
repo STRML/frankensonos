@@ -72,7 +72,7 @@ extension LiveZoneStore {
             }
             let values = members.compactMap { roomVolumes[$0] }
             let volume = values.isEmpty ? 0 : values.reduce(0, +) / Double(values.count)
-            let model = Track.live(title: track?.title ?? (track == nil ? "Nothing playing" : "Live"), artist: track?.creator ?? "", album: track?.album ?? "", key: track?.title ?? track?.uri ?? "stopped", duration: track?.duration_secs ?? 0)
+            let model = Track.live(title: track?.title ?? (track == nil ? "Nothing playing" : "Live"), artist: track?.creator ?? "", album: track?.album ?? "", key: track?.title ?? track?.uri ?? "stopped", duration: track?.duration_secs ?? 0, artURL: track?.art_url.flatMap { URL(string: $0, relativeTo: client.baseURL)?.absoluteURL })
             return AudioZone(id: id, roomNames: members, track: model, isPlaying: playing, volume: volume)
         }
         if !zones.contains(where: { $0.id == selectedZoneID }) {

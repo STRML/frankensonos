@@ -169,6 +169,82 @@ final class LiveChecks: XCTestCase {
             try require((play?["zone"] as? String)?.hasPrefix("Lag Room") == true, "zone \(String(describing: play?["zone"]))")
             try require((posts[1]["body"] as? [String: Any])?["zone"] as? String == play?["zone"] as? String, "the DJ must act on the same room")
         }
+        await check(26, "Spotify sign-in: PKCE vector, authorize URL, and every callback shape") {
+            // RFC 7636 appendix B.
+            try require(SpotifyAuth.challenge(for: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk") == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", "challenge does not match the RFC vector")
+            let verifier = SpotifyAuth.makeVerifier()
+            try require((43...128).contains(verifier.count) && verifier.allSatisfy { $0.isLetter || $0.isNumber || "-._~".contains($0) }, "verifier shape: \(verifier)")
+            try require(SpotifyAuth.makeVerifier() != verifier, "verifiers must differ")
+            let url = SpotifyAuth.authorizeURL(clientID: "cid", redirectURI: "frankensonos://spotify-callback", challenge: "CH", state: "ST")
+            let items = Dictionary(uniqueKeysWithValues: URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!.map { ($0.name, $0.value ?? "") })
+            try require(url.host == "accounts.spotify.com" && url.path == "/authorize", "authorize endpoint \(url)")
+            try require(items == ["response_type": "code", "client_id": "cid", "redirect_uri": "frankensonos://spotify-callback", "code_challenge_method": "S256", "code_challenge": "CH", "state": "ST", "scope": "user-library-read"], "authorize query \(items)")
+            func parse(_ query: String) -> Result<String, SpotifyAuthError> {
+                Result { try SpotifyAuth.code(from: URL(string: "frankensonos://spotify-callback?\(query)")!, expectedState: "ST") }.mapError { $0 as! SpotifyAuthError }
+            }
+            try require(parse("code=abc&state=ST") == .success("abc"), "good callback")
+            try require(parse("code=abc&state=OTHER") == .failure(.stateMismatch), "state mismatch must be refused")
+            try require(parse("code=abc") == .failure(.stateMismatch), "a callback without state must be refused")
+            try require(parse("error=access_denied&state=ST") == .failure(.denied("access_denied")), "denied")
+            try require(parse("state=ST") == .failure(.missingCode), "no code")
+            try require(parse("code=&state=ST") == .failure(.missingCode), "empty code")
+        }
+        await check(27, "Spotify sign-in: the app sends the daemon exactly the exchange it promised, then syncs") {
+            func post(_ path: String, _ body: [String: Any] = [:]) async throws {
+                var request = URLRequest(url: stubURL.appendingPathComponent(path))
+                request.httpMethod = "POST"
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
+                _ = try await URLSession.shared.data(for: request)
+            }
+            func exchanges() async throws -> [[String: Any]] {
+                let (data, _) = try await URLSession.shared.data(from: stubURL.appendingPathComponent("_debug/posts"))
+                return ((try JSONSerialization.jsonObject(with: data) as? [[String: Any]]) ?? []).filter { $0["path"] as? String == "/auth/spotify/exchange" }
+            }
+            func state(of url: URL) -> String {
+                URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!.first { $0.name == "state" }!.value!
+            }
+            try await post("_debug/signout")
+            let model = SpotifyModel(client: DaemonClient(baseURL: stubURL))
+            await model.load()
+            try require(model.phase == .signedOut(reauthorize: false), "stub should start signed out, got \(model.phase)")
+            try require(model.status?.clientID == "stub-client" && model.status?.appRedirectURI == "frankensonos://spotify-callback", "status lost the client id or redirect")
+            // S3: Spotify refuses. S4: wrong state. S2: the person closes the sheet. None of them reaches the daemon.
+            await model.signIn { url in URL(string: "frankensonos://spotify-callback?error=access_denied&state=\(state(of: url))")! }
+            try require(model.error?.contains("access_denied") == true, "denial not shown: \(String(describing: model.error))")
+            await model.signIn { _ in URL(string: "frankensonos://spotify-callback?code=x&state=forged")! }
+            try require(model.error?.isEmpty == false, "a forged state must be reported")
+            await model.signIn { _ in throw SpotifySignInCancelled() }
+            try require(model.error == nil, "closing the sheet is not an error, got \(String(describing: model.error))")
+            try require(try await exchanges().isEmpty, "nothing may reach the daemon before a valid callback")
+            var captured: URL?
+            await model.signIn { url in
+                captured = url
+                return URL(string: "frankensonos://spotify-callback?code=the-code&state=\(state(of: url))")!
+            }
+            let sent = try await exchanges()
+            try require(sent.count == 1, "expected one exchange, got \(sent.count)")
+            let body = sent[0]["body"] as? [String: String]
+            let challenge = URLComponents(url: captured!, resolvingAgainstBaseURL: false)!.queryItems!.first { $0.name == "code_challenge" }!.value!
+            try require(body?["code"] == "the-code" && body?["redirect_uri"] == "frankensonos://spotify-callback", "exchange body \(String(describing: body))")
+            try require(body?["code_verifier"].map(SpotifyAuth.challenge(for:)) == challenge, "the verifier does not match the challenge sent to Spotify")
+            try require(model.error == nil && model.phase == .ready, "after sign-in the library should be read, got \(model.phase) \(String(describing: model.error))")
+            // S1: with no daemon to ask, sign-in says why instead of opening a sheet.
+            let bare = SpotifyModel(client: DaemonClient(baseURL: URL(string: "http://127.0.0.1:9")!))
+            var opened = false
+            await bare.signIn { _ in opened = true; throw SpotifySignInCancelled() }
+            try require(bare.error != nil && !opened, "sign-in against an unreachable daemon must say why and open nothing")
+        }
+        await check(28, "album art: the daemon's relative art URL resolves against its address, an https URL stays") {
+            let house = LiveZoneStore(baseURL: stubURL)
+            house.start()
+            defer { house.setActive(false) }
+            try await wait("stub house", seconds: 12) { house.zones.count == 2 && house.connectionStatus == .live }
+            try await wait("art urls", seconds: 12) {
+                let lag = house.zones.first { $0.roomNames == ["Lag Room"] }?.track.artURL?.absoluteString
+                let stuck = house.zones.first { $0.roomNames == ["Stuck Room"] }?.track.artURL?.absoluteString
+                return lag == "\(stubURL.absoluteString)/art?player=RINCON_TEST&u=%2Fgetaa%3Fs%3D1%26u%3Dx" && stuck == "https://cdn.example.invalid/x.jpg"
+            }
+        }
         await check(1, "unreachable launch stays empty/offline, then bootstraps") {
             try await control("stop")
             store.start()

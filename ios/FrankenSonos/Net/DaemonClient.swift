@@ -27,6 +27,10 @@ final class DaemonClient {
 
     func spotifyStatus() async throws -> SpotifyStatus { try await get(url("spotify/status")) }
     func spotifySync() async throws { try await command("spotify/sync", body: [:]) }
+    /// Finish a sign-in the app started: the daemon trades the code for tokens and keeps them.
+    func spotifyExchange(code: String, verifier: String, redirectURI: String) async throws {
+        try await command("auth/spotify/exchange", body: ["code": code, "code_verifier": verifier, "redirect_uri": redirectURI])
+    }
     func spotifyAlbums(offset: Int, limit: Int, query: String) async throws -> SpotifyPage<SpotifyAlbum> {
         try await get(libraryURL("spotify/albums", offset: offset, limit: limit, query: query))
     }

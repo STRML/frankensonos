@@ -8,7 +8,11 @@ struct SpotifyStatus: Decodable, Equatable {
     var reauthorize: Bool
     var library: SpotifyLibrary
     var sync: SpotifySync
-    private enum CodingKeys: String, CodingKey { case configured, signedIn = "signed_in", reauthorize, library, sync }
+    var clientID: String? = nil
+    var appRedirectURI: String? = nil
+    private enum CodingKeys: String, CodingKey {
+        case configured, signedIn = "signed_in", reauthorize, library, sync, clientID = "client_id", appRedirectURI = "app_redirect_uri"
+    }
 }
 
 struct SpotifyLibrary: Decodable, Equatable {

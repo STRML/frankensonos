@@ -30,6 +30,8 @@ struct TrackDTO: Decodable {
     let duration_secs: Double?
     let position_secs: Double?
     let queue_position: Int?
+    /// An https URL, or a path on the daemon (`/art?player=…`) that serves the speaker's art.
+    let art_url: String?
 }
 
 struct FavoriteDTO: Decodable {

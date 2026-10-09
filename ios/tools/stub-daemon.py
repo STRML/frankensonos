@@ -32,6 +32,12 @@ TRANSPORT = {"Lag Room": "paused", "Stuck Room": "paused"}
 POSTS = []
 # Sync progress: None before a sync, else the number of status reads since it started.
 SYNC = {"reads": None}
+SIGNED = {"in": True}
+# What the real daemon sends for a track: a relative /art URL for a speaker's art, an https URL passed through.
+ART = {
+    "Lag Room": "/art?player=RINCON_TEST&u=%2Fgetaa%3Fs%3D1%26u%3Dx",
+    "Stuck Room": "https://cdn.example.invalid/x.jpg",
+}
 
 ALBUMS = [
     {"id": "a1", "title": "Bach: Goldberg Variations, BWV 988", "artist": "Glenn Gould", "year": 1981, "tracks": 3,
@@ -84,9 +90,12 @@ def spotify_status():
     done = reads is not None and reads >= 2
     running = reads is not None and not done
     library = {"albums": 2, "tracks": 2, "synced_at": 1791500000} if done else {"albums": 0, "tracks": 0, "synced_at": None}
+    signed_in = SIGNED["in"]
     return {
         "configured": True,
-        "signed_in": True,
+        "signed_in": signed_in,
+        "client_id": "stub-client",
+        "app_redirect_uri": "frankensonos://spotify-callback",
         "reauthorize": False,
         "library": library,
         "sync": {"running": running, "done": 5 if done else (1 if running else 0), "total": 5 if reads is not None else 0, "error": None},
@@ -123,7 +132,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(404, {"detail": "unknown room", "code": "UNKNOWN_ROOM"})
                 return
             room = room.split("@")[0]
-            self.reply(200, {"zone": zone(room), "transport_state": transport(room, True), "volume": 20})
+            track = {"title": "Aria", "creator": "Glenn Gould", "album": "Goldberg", "uri": "x-sonos-spotify:stub",
+                     "duration_secs": 183, "position_secs": 0, "art_url": ART[room]}
+            self.reply(200, {"zone": zone(room), "transport_state": transport(room, True), "volume": 20, "track": track})
         elif path == "/spotify/status":
             self.reply(200, spotify_status())
         elif path == "/spotify/albums":
@@ -152,6 +163,18 @@ class Handler(BaseHTTPRequestHandler):
                 if SYNC["reads"] is None:
                     SYNC["reads"] = 0
             self.reply(202, spotify_status())
+            return
+        if path == "/_debug/signout":
+            with LOCK:
+                SIGNED["in"] = False
+                SYNC["reads"] = None
+            self.reply(200, {"signed_in": False})
+            return
+        if path == "/auth/spotify/exchange":
+            with LOCK:
+                POSTS.append({"path": path, "body": body})
+                SIGNED["in"] = True
+            self.reply(200, {"signed_in": True})
             return
         if path in ("/play", "/dj/start", "/dj/skip", "/dj/stop"):
             with LOCK:

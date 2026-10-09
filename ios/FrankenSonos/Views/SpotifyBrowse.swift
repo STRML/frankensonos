@@ -10,6 +10,7 @@ struct SpotifyBrowse: View {
     @State private var query = ""
     @State private var album: SpotifyAlbum?
     @State private var albumTracks: [SpotifyTrack] = []
+    @State private var signInSheet = SpotifySignInSheet()
     var openPlayer: () -> Void
     @ScaledMetric private var rowHeight = 56.0
 
@@ -27,12 +28,13 @@ struct SpotifyBrowse: View {
                 notice("Can't read Spotify from the daemon", why, action: "Try again") { await model.load() }
             case .notConfigured:
                 notice("Spotify isn't set up on the daemon",
-                       "Give the daemon your Spotify app's Client ID (FSONOS_SPOTIFY_CLIENT_ID) and register http://127.0.0.1:8099/auth/spotify/callback in that app, then restart it.",
+                       "Give the daemon your Spotify app's Client ID (FSONOS_SPOTIFY_CLIENT_ID) and add frankensonos://spotify-callback to that app's redirect URIs, then restart it.",
                        action: "Check again") { await model.load() }
             case .signedOut(let reauthorize):
                 notice(reauthorize ? "Spotify needs you to sign in again" : "Sign in to Spotify",
-                       "The sign-in happens once, on a Mac: run fsonos/signin.sh from your Synology repo. It opens Spotify's consent page and reads your library.",
-                       action: "Check again") { await model.load() }
+                       "Spotify asks once for permission to read your saved albums and liked tracks. The daemon keeps the sign-in, so every room and every phone can play from your library.",
+                       action: "Sign in with Spotify") { await signIn() }
+                if let error = model.error { Text(error).s1Font(12).foregroundStyle(.red).padding(.horizontal, 16) }
             case .empty:
                 emptyLibrary
             case .ready:
@@ -47,6 +49,10 @@ struct SpotifyBrowse: View {
     }
 
     // MARK: states
+
+    private func signIn() async {
+        await model.signIn { try await signInSheet($0) }
+    }
 
     private func notice(_ title: String, _ message: String, action: String, perform: @escaping () async -> Void) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -158,6 +164,8 @@ struct SpotifyBrowse: View {
                 Text(summary).s1Font(12).foregroundStyle(S1Palette.secondary(scheme))
             }
             Spacer()
+            Button("Switch account") { Task { await signIn() } }.s1Font(13).buttonStyle(.plain)
+                .foregroundStyle(S1Palette.secondary(scheme)).padding(.trailing, 8)
             Button("Sync") { Task { await model.sync() } }.s1Font(13, weight: .semibold).buttonStyle(.plain)
                 .disabled(model.status?.sync.running == true)
         }

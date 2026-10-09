@@ -71,6 +71,37 @@ final class SpotifyModel: ObservableObject {
         }
     }
 
+    /// Sign in from the phone. `browser` shows Spotify's consent page for the URL it is given and returns the redirect
+    /// the page ends on (the system sheet in the app, a canned reply in tests). The code goes to the daemon with the
+    /// verifier; the daemon keeps the tokens. Closing the sheet is not an error.
+    func signIn(browser: (URL) async throws -> URL) async {
+        guard let client else { return }
+        error = nil
+        await load()
+        guard let status else { self.error = unreachable; return }
+        guard status.configured, let clientID = status.clientID, let redirect = status.appRedirectURI else {
+            error = SpotifyAuthError.notConfigured.localizedDescription
+            return
+        }
+        let verifier = SpotifyAuth.makeVerifier()
+        let state = SpotifyAuth.makeState()
+        let url = SpotifyAuth.authorizeURL(clientID: clientID, redirectURI: redirect, challenge: SpotifyAuth.challenge(for: verifier), state: state)
+        do {
+            let code = try SpotifyAuth.code(from: try await browser(url), expectedState: state)
+            try await client.spotifyExchange(code: code, verifier: verifier, redirectURI: redirect)
+            AppLog.shared.add("spotify", "signed in")
+        } catch is SpotifySignInCancelled {
+            AppLog.shared.add("spotify", "sign-in sheet closed")
+            return
+        } catch {
+            self.error = Self.describe(error)
+            AppLog.shared.add("spotify", "sign-in failed: \(Self.describe(error))")
+            return
+        }
+        await load()
+        await sync()
+    }
+
     /// Ask the daemon to read the library, follow its progress, then show what it cached.
     func sync() async {
         guard let client else { return }
