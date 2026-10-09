@@ -65,8 +65,9 @@ pub fn execute_guarded<T: Transport + ?Sized>(
 /// `spotify:track:` URIs render with the household's learned Spotify
 /// parameters ([`ErrorCode::RenderParamsMissing`] when it has no Spotify
 /// favorite to learn from). Other renderer URIs play as given, without DIDL
-/// metadata. Spotify albums and playlists, and the DJ, answer
-/// [`ErrorCode::NotImplemented`] until they are wired.
+/// metadata. The daemon surface resolves Spotify albums from its library
+/// before calling [`play_album`]. Other Spotify kinds and the unwired DJ
+/// answer [`ErrorCode::NotImplemented`].
 pub fn execute<T: Transport + ?Sized>(
     transport: &T,
     households: &[HouseholdState],
@@ -276,12 +277,76 @@ fn play<T: Transport + ?Sized>(
     if source_uri.starts_with("spotify:") {
         return Err(Failure::new(
             ErrorCode::NotImplemented,
-            format!("only Spotify tracks play so far; {source_uri} is not a track"),
+            format!(
+                "Spotify playlists, artists, shows and episodes are not supported: {source_uri}"
+            ),
         )
-        .with_hint("Play one of its tracks (spotify:track:...) for now."));
+        .with_hint("Play a Spotify track (spotify:track:...) or album (spotify:album:...)."));
     }
     control::play_uri(transport, households, coordinator, source_uri, "")?;
     Ok(())
+}
+
+/// Replace the coordinator's queue only after metadata and render settings
+/// are available. Sonos cannot atomically replace a queue; failures report
+/// the number of acknowledged additions and never restart the operation.
+pub(crate) fn play_album<T: Transport + ?Sized>(
+    transport: &T,
+    households: &[HouseholdState],
+    coordinator: &PlayerId,
+    album: &crate::spotify::AlbumPlayback,
+) -> Result<OutcomeDto, Failure> {
+    use fsonos_proto::{control as soap, didl};
+
+    // This is the same learning and DIDL rendering used by
+    // control::spotify_track_source, learned once for the whole album.
+    let params = control::spotify_params(transport, households, coordinator)?
+        .ok_or_else(|| Failure::new(ErrorCode::RenderParamsMissing,
+            "this household has no Spotify track among its favorites to learn its Spotify settings from"))?;
+    let sources: Vec<_> = album
+        .tracks
+        .iter()
+        .map(|track| {
+            (
+                didl::spotify_queue_uri(&track.uri),
+                didl::spotify_track_didl(&track.uri, &track.title, &params),
+            )
+        })
+        .collect();
+    let host = control::locate(households, coordinator)?.ip;
+    soap::remove_all_tracks_from_queue(transport, host).map_err(|err| {
+        album_queue_failure(err.into(), 0, sources.len(), "clearing the previous queue")
+    })?;
+    for (added, (uri, metadata)) in sources.iter().enumerate() {
+        soap::add_uri_to_queue(transport, host, uri, metadata, false).map_err(|err| {
+            album_queue_failure(err.into(), added, sources.len(), "adding a track")
+        })?;
+    }
+    control::play_queue_from(transport, households, coordinator, 1).map_err(|err| {
+        album_queue_failure(err, sources.len(), sources.len(), "starting playback")
+    })?;
+    let count = sources.len();
+    let detail = if album.total > count {
+        format!("{count} tracks; first {count} of {}", album.total)
+    } else {
+        format!("{count} tracks")
+    };
+    Ok(OutcomeDto::sent(format!(
+        "playing album {} ({detail})",
+        album.title
+    )))
+}
+
+fn album_queue_failure(err: CoreError, added: usize, total: usize, step: &str) -> Failure {
+    let cause = Failure::from(err);
+    // UPnP refusal, network uncertainty and malformed replies all require
+    // inspection, not an automatic retry of a destructive queue replacement.
+    Failure {
+        upnp_code: cause.upnp_code,
+        ..Failure::new(ErrorCode::UpnpFault,
+            format!("album playback failed while {step}: {added} of {total} tracks added (confirmed); {}", cause.detail))
+            .with_hint("Inspect the queue before retrying; the last request may have applied without a reply.")
+    }
 }
 
 /// Send a transport action; returns the verb for the summary.
@@ -581,9 +646,14 @@ mod tests {
     #[test]
     fn unwired_paths_say_so_without_touching_speakers() {
         let t = Canned::ok("");
-        let album = play_spotify("spotify:album:0123456789ABCDEFabcdef");
+        let album = play_spotify("spotify:playlist:0123456789ABCDEFabcdef");
         let err = execute(&t, &households(), &album).unwrap_err();
         assert_eq!((err.code, err.status()), (ErrorCode::NotImplemented, 501));
+        assert!(
+            err.hint.contains("track") && err.hint.contains("album"),
+            "{}",
+            err.hint
+        );
         let dj = Command::Dj {
             coordinator: id("RINCON_DEN"),
             action: DjAction::Start,

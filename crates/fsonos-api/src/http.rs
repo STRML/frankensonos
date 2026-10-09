@@ -707,7 +707,15 @@ impl Ctx<'_> {
     {
         let tool = op.id;
         self.route(&op, move |surface, client, req| {
-            answer(body::<B>(req).and_then(|b| surface.control(client, tool, |h| plan(h, &b))))
+            let result =
+                body::<B>(req).and_then(|b| surface.control(client, tool, |h| plan(h, &b)));
+            if tool == "play"
+                && let Err(failure) = &result
+                && failure.code == ErrorCode::SpotifyNotConfigured
+            {
+                return crate::failure::http_error(failure, 409, false);
+            }
+            answer(result)
         })
         .request_schema::<B>(true)
         .response_schema::<OutcomeDto>(200, "What was done")

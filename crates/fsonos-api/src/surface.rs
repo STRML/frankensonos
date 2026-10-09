@@ -389,6 +389,18 @@ impl Surface {
         guard: &Guard<'_>,
         command: &Command,
     ) -> Result<OutcomeDto, Failure> {
+        if let Command::Play {
+            coordinator,
+            source_uri,
+            title,
+        } = command
+            && source_uri.starts_with("spotify:album:")
+        {
+            let album = self.album_playback(source_uri, title.as_deref())?;
+            // A multi-step queue replacement can partly succeed. Repeating
+            // it through the single-command healing path would lose that state.
+            return crate::execute::play_album(&*self.transport, households, coordinator, &album);
+        }
         if let Command::Dj {
             coordinator,
             action,

@@ -340,6 +340,28 @@ change `FSONOS_SPOTIFY_REDIRECT_URI`, register that exact URI and tunnel its por
 Tokens stay in `FSONOS_DATA_DIR/auth/spotify-token.json`, written owner-only.
 Artwork URLs are cached as metadata; the daemon does not fetch the images.
 
+`POST /play` plays an album in the selected room's group:
+
+```bash
+curl -X POST -H 'Content-Type: application/json' \
+  http://127.0.0.1:8099/play \
+  -d '{"zone":"<room>","source_uri":"spotify:album:<album-id>"}'
+```
+
+An `open.spotify.com/album/<album-id>` link works too. The daemon replaces the
+group coordinator's queue with the album's tracks and starts at track 1.
+Synced albums play from the cache without a current daemon sign-in; an
+uncached album requires the stored Spotify token. The daemon queues the first
+100 tracks of a larger album and states the cap in its response. Cached albums
+use their stored title; for a fetched album, supply `title` for the success
+message, or it uses the album URI. Each household still needs a Spotify track
+in My Sonos to learn its render settings.
+
+Album playback requires the existing `play` policy permission. Playlists,
+artists, shows and episodes remain unsupported. A queue-write failure reports
+the confirmed track count; inspect the queue before retrying. See
+[Spotify album playback errors](ERRORS.md#spotify-album-playback).
+
 LAN and direct tailnet callers are `unknown`. Their default policy allows
 reads; `spotify_sync` requires an explicit allow rule. If `policy.toml` already
 has `[clients.unknown] allow`, include all of the new browsing operations you

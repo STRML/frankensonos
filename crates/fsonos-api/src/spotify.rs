@@ -138,6 +138,25 @@ pub struct TracksDto {
     pub items: Vec<LikedTrackDto>,
 }
 
+pub(crate) struct AlbumPlayback {
+    pub title: String,
+    pub tracks: Vec<TrackDto>,
+    pub total: usize,
+}
+
+fn album_missing() -> Failure {
+    Failure::new(
+        ErrorCode::NoMatch,
+        "album not in your synced library; sync it or play one of its tracks",
+    )
+    .with_hint("Album unavailable: sync it or play one of its tracks.")
+}
+
+fn ordered_tracks(mut tracks: Vec<TrackDto>) -> Vec<TrackDto> {
+    tracks.sort_by(|a, b| (a.disc, a.number, &a.uri).cmp(&(b.disc, b.number, &b.uri)));
+    tracks
+}
+
 struct TimedAuthorization {
     pending: PendingAuthorization,
     at: Instant,
@@ -202,6 +221,59 @@ fn validate_exchange(input: &ExchangeRequest, redirect: &str) -> Result<Pkce, Fa
 }
 
 impl Spotify {
+    fn fetch_album(&self, uri: &str) -> Result<Vec<TrackDto>, Failure> {
+        if self.config.is_none() {
+            return Err(not_configured());
+        }
+        {
+            let state = self.state.lock().map_err(|_| internal())?;
+            if !state.signed_in || state.reauthorize {
+                return Err(Failure::new(
+                    ErrorCode::SpotifyAuthRequired,
+                    "Spotify sign-in is required to fetch this album.",
+                ));
+            }
+            if state.authorizing || state.sync.running {
+                return Err(busy());
+            }
+        }
+        // The existing client's runtime must run off the synchronous HTTP
+        // handler's runtime thread, as sign-in and sync already do.
+        let result = std::thread::scope(|scope| {
+            scope.spawn(|| self.run_session(async |session, cx| {
+                fsonos_spotify::expand::fetch_album_tracks(session, cx, uri).await
+            })).join().map_err(|_| internal())?
+                .map_err(|err| {
+                    if matches!(err, SpotifyError::Auth(_) | SpotifyError::Api { status: 401, .. }) {
+                        if let Ok(mut state) = self.state.lock() { state.reauthorize = true; }
+                        return Failure::new(ErrorCode::SpotifyAuthRequired, "Spotify sign-in expired; sign in again to fetch this album.");
+                    }
+                    if matches!(err, SpotifyError::Api { status: 404, .. }) { return album_missing(); }
+                    Failure::new(ErrorCode::UpnpFault, format!("could not fetch album tracks: {}", safe_error(&err, self.cache.path())))
+                        .with_hint("Sync the album or play one of its tracks; the existing queue is unchanged.")
+                })
+        })?;
+        if result.is_empty() {
+            return Err(album_missing());
+        }
+        Ok(result
+            .into_iter()
+            .map(|track| TrackDto {
+                id: track
+                    .source_uri
+                    .strip_prefix("spotify:track:")
+                    .unwrap_or_default()
+                    .into(),
+                title: track.title,
+                artists: Vec::new(),
+                uri: track.source_uri,
+                duration_secs: track.duration_secs,
+                disc: Some(track.disc_number),
+                number: Some(track.track_number),
+            })
+            .collect())
+    }
+
     pub fn new(
         config: Option<SpotifyConfig>,
         data_dir: &Path,
@@ -617,6 +689,50 @@ fn html(status: u16, message: &str) -> Response {
 }
 
 impl crate::Surface {
+    pub(crate) fn album_playback(
+        &self,
+        uri: &str,
+        title: Option<&str>,
+    ) -> Result<AlbumPlayback, Failure> {
+        let cached = self
+            .with_store(|s| {
+                let cache = s.spotify_cache()?;
+                let album = cache.albums.iter().find(|a| a.saved && a.uri == uri);
+                let Some(album) = album else {
+                    return Ok(None);
+                };
+                let active: std::collections::HashSet<_> = cache.track_uris.iter().collect();
+                let tracks = s
+                    .library()?
+                    .iter()
+                    .filter(|row| {
+                        row.album_uri.as_deref() == Some(uri)
+                            && active.contains(&row.track.source_uri)
+                    })
+                    .map(TrackDto::from)
+                    .collect();
+                Ok(Some((album.title.clone(), ordered_tracks(tracks))))
+            })?
+            .flatten();
+        let (title, mut tracks) = match cached {
+            Some((title, tracks)) if !tracks.is_empty() => (title, tracks),
+            _ => (
+                title.unwrap_or(uri).to_string(),
+                self.spotify
+                    .as_ref()
+                    .ok_or_else(not_configured)?
+                    .fetch_album(uri)?,
+            ),
+        };
+        let total = tracks.len();
+        tracks.truncate(100);
+        Ok(AlbumPlayback {
+            title,
+            tracks,
+            total,
+        })
+    }
+
     fn spotify_admit(
         &self,
         client: &fsonos_core::policy::Client,

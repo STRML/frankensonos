@@ -75,3 +75,29 @@ answers 409; upstream failures use 502 with `retryable: true`. A token-cache
 write failure names the cache path and answers 500. A speaker artwork timeout
 or connection failure answers 502 with `retryable: true`; its 404 is passed
 through without a cache header.
+
+## Spotify album playback
+
+`POST /play` accepts Spotify tracks and albums, including canonicalized
+`open.spotify.com/album` links. Playlists, artists, shows and episodes return
+`501 NOT_IMPLEMENTED` with a hint naming the supported track and album kinds.
+Album playback uses the existing `play` policy operation.
+
+The daemon reads ordered album tracks from its synced library. An uncached
+album uses the stored Spotify token and the existing paged album-track client.
+Without sign-in, `/play` returns `409 SPOTIFY_AUTH_REQUIRED`; missing Spotify
+configuration returns `409 SPOTIFY_NOT_CONFIGURED` with its configuration hint.
+The sign-in routes keep their existing 503 configuration response. A missing
+or empty upstream album returns `404 NO_MATCH`: "album not in your synced
+library; sync it or play one of its tracks". Fetch failures and missing render
+parameters leave the existing queue untouched.
+
+After preflight, album playback clears the coordinator's queue, adds at most
+100 tracks in disc/track order, and starts at track 1. A larger album's success
+message states the cap. Queue replacement is not atomic. If clearing, adding
+or starting playback fails, the daemon returns `502 UPNP_FAULT` with
+`retryable: false` and the number of confirmed additions, for example
+"1 of 3 tracks added (confirmed)". It stops at the failed step and does not
+restore the old queue or automatically repeat the request. A lost or unreadable
+reply can mean the last request applied; inspect the queue before retrying.
+The album result is never a silent partial success.

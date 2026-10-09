@@ -76,6 +76,24 @@ impl Harness {
         policy: Policy,
         unwritable: bool,
     ) -> Self {
+        Self::start_surface(name, configured, identity, unwritable, |spotify| {
+            Surface::new(
+                Box::new(NoLan),
+                Box::new(|_| Ok(Vec::new())),
+                policy,
+                Box::new(SystemClock),
+            )
+            .with_action_log(Box::new(SqliteStore::open_in_memory().unwrap()), "test")
+            .with_spotify(spotify)
+        })
+    }
+    pub fn start_surface(
+        name: &str,
+        configured: bool,
+        identity: &Identity,
+        unwritable: bool,
+        surface: impl FnOnce(Arc<Spotify>) -> Surface,
+    ) -> Self {
         let logs = logs();
         let fake = FakeSpotify::start();
         let dir = scratch_dir(name);
@@ -91,16 +109,7 @@ impl Harness {
             "frankensonos://spotify-callback".into(),
         )
         .unwrap();
-        let surface = Arc::new(
-            Surface::new(
-                Box::new(NoLan),
-                Box::new(|_| Ok(Vec::new())),
-                policy,
-                Box::new(SystemClock),
-            )
-            .with_action_log(Box::new(SqliteStore::open_in_memory().unwrap()), "test")
-            .with_spotify(spotify),
-        );
+        let surface = Arc::new(surface(spotify));
         let web = WebPolicy::for_listener("127.0.0.1:0".parse().unwrap(), &[]);
         let app = Arc::new(fsonos_api::app(&surface, identity, &web));
         let server = Arc::new(TcpServer::new(
