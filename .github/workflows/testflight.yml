@@ -113,13 +113,10 @@ jobs:
           security list-keychains -d user -s "$KC" "$HOME/Library/Keychains/login.keychain-db"
           security default-keychain -d user -s "$KC"
           # The cleanup job revokes "Created via API" certificates an hour after they were made, and a revoked one that
-          # is still in this keychain fails CodeSign with "unable to build chain". Drop what earlier runs left (the
-          # key goes with the certificate) so Xcode makes a fresh pair for this archive.
-          for _ in $(seq 1 20); do
-            HASH=$(security find-identity "$KC" | awk '/Created via API/ {print $2; exit}')
-            [ -n "$HASH" ] || break
-            security delete-identity -Z "$HASH" "$KC" || break
-          done
+          # is still in this keychain fails CodeSign with "unable to build chain". Drop the identities that are old
+          # enough to have been revoked, and only those: deleting a younger one orphans a certificate the account
+          # still counts as live.
+          ios/tools/drop-old-ci-identities "$KC"
       - name: Archive
         working-directory: ios
         env:

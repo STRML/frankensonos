@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Deletes the throwaway "Apple Development: Created via API" identities from a CI keychain once they are old enough
+# for revoke-ci-certificates to revoke them, so the keychain and the account agree.
+#
+#   tools/drop-old-ci-identities KEYCHAIN [--dry-run]
+#
+# Deleting a younger identity would orphan a certificate Apple still treats as live ("Your account already has an Apple
+# Development signing certificate for this machine, but its private key is not installed"). Keeping a revoked one
+# fails CodeSign with "unable to build chain". The age is the certificate's own start date, and MIN_AGE_MINUTES
+# (default 60) is the same threshold revoke-ci-certificates uses.
+set -euo pipefail
+
+keychain="${1:?usage: drop-old-ci-identities KEYCHAIN [--dry-run]}"
+dry_run=0
+[ "${2:-}" = "--dry-run" ] && dry_run=1
+name="${CI_CERT_NAME:-Apple Development: Created via API}"
+
+hashes="$(security find-certificate -a -c "$name" -Z -p "$keychain" 2>/dev/null | MIN_AGE_MINUTES="${MIN_AGE_MINUTES:-60}" python3 -I -c '
+import os, re, subprocess, sys
+from datetime import datetime, timedelta, timezone
+
+min_age = timedelta(minutes=int(os.environ["MIN_AGE_MINUTES"]))
+now = datetime.now(timezone.utc)
+for block in re.split(r"(?=SHA-1 hash:)", sys.stdin.read()):
+    found = re.search(r"SHA-1 hash: ([0-9A-F]{40})", block)
+    pem = re.search(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", block, re.S)
+    if not (found and pem):
+        continue
+    start = subprocess.run(["openssl", "x509", "-noout", "-startdate"], input=pem.group(0), capture_output=True, text=True).stdout
+    when = datetime.strptime(start.strip().split("=", 1)[1], "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
+    if now - when >= min_age:
+        print(found.group(1))
+')"
+
+[ -n "$hashes" ] || { echo "No CI identities old enough to drop."; exit 0; }
+for hash in $hashes; do
+  if [ "$dry_run" = 1 ]; then
+    echo "would delete $hash"
+  else
+    security delete-identity -Z "$hash" "$keychain" >/dev/null && echo "deleted $hash"
+  fi
+done
