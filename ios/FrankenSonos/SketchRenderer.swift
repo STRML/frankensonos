@@ -14,7 +14,6 @@ enum SketchRenderer {
             ("rooms", .rooms, false, false, false, false, .light),
             ("rooms-dark", .rooms, false, false, false, false, .dark),
             ("browse", .browse, false, false, false, false, .light),
-            ("my-sonos", .mySonos, false, false, false, false, .light),
             ("now-playing", .rooms, true, false, false, false, .dark),
             ("group-rooms", .rooms, false, true, false, false, .light),
             ("group-rooms-scrolled-end", .rooms, false, true, false, true, .light),
@@ -90,7 +89,7 @@ enum SketchRenderer {
         NSGraphicsContext.current = context
         NSColor(white: 0.9, alpha: 1).setFill()
         NSRect(x: 0, y: 0, width: 3120, height: 5064).fill()
-        for (index, name) in ["rooms", "rooms-dark", "browse", "my-sonos", "now-playing", "group-rooms", "group-rooms-scrolled-end", "now-playing-rooms-sheet", "now-playing-rooms-sheet-scrolled-end", "settings", "search", "search-selected-room"].enumerated() {
+        for (index, name) in ["rooms", "rooms-dark", "browse", "now-playing", "group-rooms", "group-rooms-scrolled-end", "now-playing-rooms-sheet", "now-playing-rooms-sheet-scrolled-end", "settings", "search", "search-selected-room"].enumerated() {
             guard let image = NSImage(contentsOf: directory.appendingPathComponent("\(name).png")) else { throw RenderError.bitmap(name) }
             image.draw(in: NSRect(x: (index % 4) * 780, y: (2 - index / 4) * 1688, width: 780, height: 1688))
         }

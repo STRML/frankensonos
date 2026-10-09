@@ -8,6 +8,9 @@ struct SearchView: View {
     @State private var recent = ["Northlight", "Piano", "Amber Fields", "Evening music"]
     var openPlayer: () -> Void = {}
     private let services = ["All", "Spotify", "Music Library", "Sonos Radio"]
+    private let liveServices = ["Spotify", "Favorites"]
+    /// Live mode searches all of Spotify unless the Favorites chip is picked.
+    private var searchesSpotify: Bool { store.isLive && service != "Favorites" }
     private var results: [Track] {
         store.tracks.filter { track in
             (store.isLive || service == "All" || service == "Music Library" || track.source == service) &&
@@ -30,7 +33,7 @@ struct SearchView: View {
             .padding(.horizontal, 16).padding(.top, 16)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(store.isLive ? ["Favorites"] : services, id: \.self) { name in
+                    ForEach(store.isLive ? liveServices : services, id: \.self) { name in
                         Button { service = name } label: {
                             Text(name).s1Font(12, weight: service == name ? .semibold : .regular)
                                 .fixedSize().padding(.horizontal, 12).frame(height: 32)
@@ -45,7 +48,9 @@ struct SearchView: View {
             .padding(.vertical, 12)
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
-                    if query.isEmpty && !store.isLive {
+                    if searchesSpotify {
+                        SpotifySearchResultsView(query: query, openPlayer: openPlayer)
+                    } else if query.isEmpty && !store.isLive {
                         HStack {
                             Text("Recent Searches").s1Font(17, weight: .semibold)
                             Spacer()
@@ -71,14 +76,16 @@ struct SearchView: View {
                     } else {
                         Text("Songs").s1Font(17, weight: .semibold).padding(16)
                     }
-                    ForEach(results) { track in
-                        SongRow(track: track) {
-                            if !query.isEmpty && !recent.contains(query) { recent.insert(query, at: 0) }
-                            store.selectTrack(track, in: store.selectedZoneID)
-                            openPlayer()
+                    if !searchesSpotify {
+                        ForEach(results) { track in
+                            SongRow(track: track) {
+                                if !query.isEmpty && !recent.contains(query) { recent.insert(query, at: 0) }
+                                store.selectTrack(track, in: store.selectedZoneID)
+                                openPlayer()
+                            }
                         }
+                        if results.isEmpty { Text("No songs found").s1Font(13).foregroundStyle(S1Palette.secondary(scheme)).padding(16) }
                     }
-                    if results.isEmpty { Text("No songs found").s1Font(13).foregroundStyle(S1Palette.secondary(scheme)).padding(16) }
                 }
                 .padding(.bottom, 16)
             }

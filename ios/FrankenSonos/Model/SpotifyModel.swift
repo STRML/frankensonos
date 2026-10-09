@@ -23,6 +23,9 @@ final class SpotifyModel: ObservableObject {
     @Published private(set) var likedTotal = 0
     @Published private(set) var unreachable: String?
     @Published private(set) var error: String?
+    /// The last catalog search (all of Spotify), separate from the library lists above.
+    @Published private(set) var catalog: SpotifySearchResults?
+    @Published private(set) var catalogError: String?
     private(set) var query = ""
     /// True for the canned library the screenshot tool shows; it never talks to a daemon.
     private(set) var isSample = false
@@ -41,6 +44,7 @@ final class SpotifyModel: ObservableObject {
         self.client = client
         status = nil
         albums = []; albumsTotal = 0; liked = []; likedTotal = 0
+        catalog = nil; catalogError = nil
         albumTracks = [:]
         unreachable = nil; error = nil
     }
@@ -128,6 +132,26 @@ final class SpotifyModel: ObservableObject {
     func search(_ text: String) async {
         query = text
         await reloadLists()
+    }
+
+    /// Search all of Spotify. An empty query clears the results; a newer search cancels this one, which is not an error.
+    func searchCatalog(_ text: String) async {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        catalogError = nil
+        guard let client, !text.isEmpty else { catalog = nil; return }
+        do {
+            let found = try await client.spotifySearch(query: text)
+            guard !Task.isCancelled else { return }
+            catalog = found
+        } catch is CancellationError {
+            return
+        } catch let error as URLError where error.code == .cancelled {
+            return
+        } catch {
+            catalog = nil
+            catalogError = Self.describe(error)
+            AppLog.shared.add("spotify", "search failed: \(Self.describe(error))")
+        }
     }
 
     func tracks(for album: SpotifyAlbum) async -> [SpotifyTrack] {

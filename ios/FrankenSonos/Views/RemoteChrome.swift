@@ -170,8 +170,7 @@ struct S1BottomTabBar: View {
     @EnvironmentObject private var store: MockZoneStore
     var body: some View {
         HStack(spacing: 0) {
-            tab("My Sonos", "star", .mySonos)
-            tab("Browse", "music.note", .browse)
+            tab("Music", "music.note", .browse)
             tab("Rooms", "house", .rooms)
             tab("Search", "magnifyingglass", .search)
             tab("Settings", "gearshape", .settings)
@@ -202,8 +201,7 @@ struct RemoteShell: View {
     @EnvironmentObject private var store: MockZoneStore
     private var title: String {
         switch store.selectedTab {
-        case .mySonos: "My Sonos"
-        case .browse: store.browseSource?.name ?? "Browse"
+        case .browse: store.browseSource?.name ?? "Music"
         case .rooms: "Rooms"
         case .search: "Search"
         case .settings: "Settings"
@@ -220,7 +218,6 @@ struct RemoteShell: View {
                 switch store.selectedTab {
                 case .rooms: RoomsView()
                 case .browse: BrowseView(openPlayer: showPlayer)
-                case .mySonos: MySonosView(openPlayer: showPlayer)
                 case .search: SearchView(openPlayer: showPlayer)
                 case .settings: SettingsView()
                 }

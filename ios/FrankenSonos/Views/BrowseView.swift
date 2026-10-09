@@ -51,6 +51,7 @@ struct BrowseView: View {
                         }
                     }
                 } else {
+                    recentlyPlayed
                     ForEach(MusicSource.all) { source in
                         Button { store.browseSource = source } label: {
                             HStack(spacing: 16) {
@@ -74,6 +75,29 @@ struct BrowseView: View {
             }
         }
     }
+    /// The row of recent covers that used to sit on its own My Sonos tab.
+    private var recentlyPlayed: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Recently Played").s1Font(18, weight: .semibold).padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 16)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(Array(store.tracks.prefix(6))) { track in
+                        Button { store.selectTrack(track, in: store.selectedZoneID); openPlayer() } label: {
+                            VStack(alignment: .leading, spacing: 7) {
+                                AlbumArtworkView(track: track).frame(width: 136, height: 136)
+                                Text(track.album).s1Font(13, weight: .medium).lineLimit(1)
+                                Text(track.artist).s1Font(11).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            .frame(width: 136, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16).padding(.bottom, 16)
+            }
+        }
+    }
+
     private func sourceTracks(_ source: MusicSource) -> [Track] {
         source.name == "Music Library" ? store.tracks : store.tracks.filter { $0.source == source.name }
     }

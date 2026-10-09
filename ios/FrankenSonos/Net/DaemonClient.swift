@@ -40,6 +40,13 @@ final class DaemonClient {
     func spotifyAlbumTracks(id: String) async throws -> [SpotifyTrack] {
         try await get(url("spotify/albums/\(id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? id)/tracks"))
     }
+    /// Albums and tracks matching `query` anywhere in Spotify's catalog.
+    func spotifySearch(query: String) async throws -> SpotifySearchResults {
+        var components = URLComponents(url: url("spotify/search"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "q", value: query)]
+        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        return try await get(components.url!)
+    }
     private func libraryURL(_ path: String, offset: Int, limit: Int, query: String) -> URL {
         var components = URLComponents(url: url(path), resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "offset", value: String(offset)), URLQueryItem(name: "limit", value: String(limit))]

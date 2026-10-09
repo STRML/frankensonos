@@ -16,5 +16,5 @@ protocol ZoneStore: ObservableObject {
 }
 
 enum RemoteTab: Hashable {
-    case mySonos, browse, rooms, search, settings
+    case browse, rooms, search, settings
 }

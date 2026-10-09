@@ -52,6 +52,13 @@ struct SpotifyAlbum: Decodable, Identifiable, Equatable {
     private enum CodingKeys: String, CodingKey { case id, title, artist, year, tracks, uri, artUrl = "art_url" }
 }
 
+/// `GET /spotify/search`: matches from all of Spotify, not just the owner's library.
+struct SpotifySearchResults: Decodable, Equatable {
+    var albums: [SpotifyAlbum]
+    var tracks: [SpotifyTrack]
+    var isEmpty: Bool { albums.isEmpty && tracks.isEmpty }
+}
+
 /// A track of an album, or a liked track (which also carries its album's name and art).
 struct SpotifyTrack: Decodable, Identifiable, Equatable {
     var id: String
