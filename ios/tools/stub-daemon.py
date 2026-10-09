@@ -30,6 +30,13 @@ LOCK = threading.Lock()
 PENDING = {"Lag Room": None, "Stuck Room": None}
 TRANSPORT = {"Lag Room": "paused", "Stuck Room": "paused"}
 POSTS = []
+# Pause, resume and play-favorite bodies, kept apart from POSTS so row 25 still sees only what it sent.
+COMMANDS = []
+FAVORITES = [
+    {"id": "FV:2/1", "title": "Jazz Mix", "kind": "station", "description": None, "art_uri": None},
+    {"id": "FV:2/2", "title": "Jazz Classics", "kind": "station", "description": None, "art_uri": None},
+    {"id": "FV:2/3", "title": "Morning News", "kind": "station", "description": None, "art_uri": None},
+]
 # Sync progress: None before a sync, else the number of status reads since it started.
 SYNC = {"reads": None}
 SIGNED = {"in": True}
@@ -144,9 +151,14 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, ALBUM_TRACKS.get(album, []))
         elif path == "/spotify/tracks":
             self.reply(200, page(LIKED, query))
+        elif path == "/favorites":
+            self.reply(200, FAVORITES)
         elif path == "/_debug/posts":
             with LOCK:
                 self.reply(200, list(POSTS))
+        elif path == "/_debug/commands":
+            with LOCK:
+                self.reply(200, list(COMMANDS))
         elif path == "/health":
             self.reply(200, {"status": "ok", "version": "stub"})
         elif path == "/events":
@@ -182,6 +194,12 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, {"done": "ok " + path, "changed": True})
             return
         room = str(body.get("zone", "")).split("@")[0]
+        if path in ("/pause", "/resume", "/play/favorite"):
+            with LOCK:
+                COMMANDS.append({"path": path, "body": body})
+        if path == "/play/favorite" and room in PENDING:
+            self.reply(200, {"done": "playing favorite in " + room, "changed": True})
+            return
         if room not in PENDING or path not in ("/resume", "/pause"):
             self.reply(404, {"detail": "not found", "code": "NOT_FOUND"})
             return

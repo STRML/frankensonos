@@ -11,6 +11,7 @@ struct SpotifyBrowse: View {
     @State private var album: SpotifyAlbum?
     @State private var albumTracks: [SpotifyTrack] = []
     @State private var signInSheet = SpotifySignInSheet()
+    @State private var linkNote: String?
     var openPlayer: () -> Void
     @ScaledMetric private var rowHeight = 56.0
 
@@ -21,6 +22,7 @@ struct SpotifyBrowse: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            linkRow
             switch model.phase {
             case .loading:
                 ProgressView().frame(maxWidth: .infinity).padding(32)
@@ -45,6 +47,34 @@ struct SpotifyBrowse: View {
             guard !model.isSample else { return }
             model.attach(store.daemonClient)
             await model.load()
+        }
+    }
+
+    // MARK: pasted link
+
+    /// Plays a Spotify link from the clipboard. It needs no sign-in: the speaker plays through the account linked in Sonos.
+    private var linkRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                PasteButton(payloadType: String.self) { strings in
+                    Task { @MainActor in play(link: strings.first ?? "") }
+                }
+                .buttonBorderShape(.capsule).labelStyle(.titleAndIcon)
+                Text("Copy a link in Spotify, then paste it here.").s1Font(12).foregroundStyle(S1Palette.secondary(scheme))
+            }
+            if let linkNote { Text(linkNote).s1Font(12).foregroundStyle(linkNote.hasPrefix("Playing") ? S1Palette.secondary(scheme) : .red) }
+        }
+        .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 4)
+    }
+
+    private func play(link text: String) {
+        switch SpotifyLink.parse(text) {
+        case .failure(let error):
+            linkNote = error.message
+        case .success(let link):
+            guard store.zones.contains(where: { $0.id == store.selectedZoneID }) else { linkNote = "Pick a room first."; return }
+            store.playSpotify(uri: link.uri, title: "Spotify \(link.kind)")
+            linkNote = "Playing the \(link.kind) in \(store.selectedZone.displayName)."
         }
     }
 

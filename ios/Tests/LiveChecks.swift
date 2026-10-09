@@ -245,6 +245,84 @@ final class LiveChecks: XCTestCase {
                 return lag == "\(stubURL.absoluteString)/art?player=RINCON_TEST&u=%2Fgetaa%3Fs%3D1%26u%3Dx" && stuck == "https://cdn.example.invalid/x.jpg"
             }
         }
+        await check(29, "pasted Spotify links: every shape becomes a canonical URI, every bad one says why") {
+            let id = "4uLU6hMCjMI75M1A2tKUQC"
+            func uri(_ text: String) -> String? { if case .success(let link) = SpotifyLink.parse(text) { return link.uri } else { return nil } }
+            func failure(_ text: String) -> SpotifyLinkError? { if case .failure(let error) = SpotifyLink.parse(text) { return error } else { return nil } }
+            try require(uri("spotify:track:\(id)") == "spotify:track:\(id)", "C1")
+            try require(uri("https://open.spotify.com/track/\(id)?si=abc123#x") == "spotify:track:\(id)", "C2 query and fragment must go")
+            try require(uri("https://open.spotify.com/intl-de/album/\(id)") == "spotify:album:\(id)", "C3 locale segment")
+            try require(uri("  \n Listen to this https://open.spotify.com/playlist/\(id)?si=z  \n") == "spotify:playlist:\(id)", "C8 text around the link")
+            try require(uri("http://open.spotify.com/artist/\(id)") == "spotify:artist:\(id)", "http is accepted")
+            try require(failure("https://open.spotify.com/user/\(id)") == .unsupportedKind, "C4 kind")
+            try require(failure("spotify:radio:\(id)") == .unsupportedKind, "C4 uri kind")
+            try require(failure("https://spotify.link/AbCdEf") == .shortLink, "C5")
+            try require(failure("https://open.spotify.com/track/abc") == .cutOff, "C6 short id")
+            try require(failure("spotify:track:\(id)xx") == .cutOff, "C6 long id")
+            try require(failure("https://example.com/track/\(id)") == .notSpotify, "C7 other site")
+            try require(failure("") == .notSpotify && failure("hello") == .notSpotify, "C7 plain text")
+            try require(failure("https://evil.example/?u=https://open.spotify.com/track/\(id)") == nil, "a Spotify link inside another site's URL is still a Spotify link in the text")
+            try require(SpotifyLink.parse("spotify:track:\(id)") == .success(SpotifyLink(kind: "track", id: id)), "kind and id")
+            try require(SpotifyLinkError.shortLink.message.contains("open.spotify.com"), "the short-link message must say what to do")
+        }
+        await check(30, "Siri and Shortcuts: pause and resume reach the right room and say what they did") {
+            let remote = RoomRemote(client: DaemonClient(baseURL: stubURL))
+            func commands() async throws -> [[String: Any]] {
+                let (data, _) = try await URLSession.shared.data(from: stubURL.appendingPathComponent("_debug/commands"))
+                return (try JSONSerialization.jsonObject(with: data) as? [[String: Any]]) ?? []
+            }
+            let before = try await commands().count
+            let paused = try await remote.pause(room: "  lag room ")
+            try require(paused == "Paused Lag Room.", "I9 pause summary: \(paused)")
+            let resumed = try await remote.resume(room: "Lag Room")
+            try require(resumed == "Resumed Lag Room.", "I9 resume summary: \(resumed)")
+            var sent = Array(try await commands().dropFirst(before))
+            try require(sent.map { $0["path"] as? String } == ["/pause", "/resume"], "paths \(sent)")
+            try require(sent.allSatisfy { ($0["body"] as? [String: String]) == ["zone": "Lag Room"] }, "I2/I9 the daemon must get the room's real name: \(sent)")
+            do {
+                _ = try await remote.pause(room: "Garage")
+                throw CheckFailure(message: "I1 an unknown room was accepted")
+            } catch let error as RoomRemoteError {
+                try require(error.message == "I don't know a room called Garage. Rooms: Lag Room, Stuck Room.", "I1 message: \(error.message)")
+            }
+            sent = Array(try await commands().dropFirst(before))
+            try require(sent.count == 2, "I1 nothing may be sent for an unknown room")
+            do {
+                _ = try await RoomRemote(client: DaemonClient(baseURL: URL(string: "http://127.0.0.1:9")!)).pause(room: "Lag Room")
+                throw CheckFailure(message: "I6 an unreachable daemon was accepted")
+            } catch let error as RoomRemoteError {
+                try require(error.message == "I can't reach the daemon.", "I6 message: \(error.message)")
+            }
+            do {
+                _ = try await RoomRemote(client: nil).pause(room: "Lag Room")
+                throw CheckFailure(message: "I7 no daemon was accepted")
+            } catch let error as RoomRemoteError {
+                try require(error.message == "Open FrankenSonos and choose a daemon first.", "I7 message: \(error.message)")
+            }
+        }
+        await check(31, "Siri and Shortcuts: favorites match by name, and an unclear name sends nothing") {
+            let remote = RoomRemote(client: DaemonClient(baseURL: stubURL))
+            func commands() async throws -> [[String: Any]] {
+                let (data, _) = try await URLSession.shared.data(from: stubURL.appendingPathComponent("_debug/commands"))
+                return (try JSONSerialization.jsonObject(with: data) as? [[String: Any]]) ?? []
+            }
+            let before = try await commands().count
+            let said = try await remote.playFavorite("jazz mix", room: "Lag Room")
+            try require(said == "Playing Jazz Mix in Lag Room.", "I10 summary: \(said)")
+            let unique = try await remote.playFavorite("morning", room: "Lag Room")
+            try require(unique == "Playing Morning News in Lag Room.", "I5 unique substring: \(unique)")
+            for (name, expected) in [("Podcasts", "No favorite called Podcasts in Lag Room."), ("jazz", "More than one favorite matches jazz: Jazz Classics, Jazz Mix.")] {
+                do {
+                    _ = try await remote.playFavorite(name, room: "Lag Room")
+                    throw CheckFailure(message: "an unclear favorite name '\(name)' was accepted")
+                } catch let error as RoomRemoteError {
+                    try require(error.message == expected, "message for \(name): \(error.message)")
+                }
+            }
+            let sent = Array(try await commands().dropFirst(before))
+            try require(sent.count == 2 && sent.allSatisfy { $0["path"] as? String == "/play/favorite" }, "only the two clear requests may be sent: \(sent)")
+            try require((sent[0]["body"] as? [String: String]) == ["zone": "Lag Room", "favorite": "FV:2/1"], "I10 body \(sent[0])")
+        }
         await check(1, "unreachable launch stays empty/offline, then bootstraps") {
             try await control("stop")
             store.start()
