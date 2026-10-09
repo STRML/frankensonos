@@ -280,8 +280,31 @@ fn spotify(cx: &Ctx<'_>) -> Vec<RouteEntry> {
         )
         .query_schema::<SpotifyListQuery>(false)
         .response_schema::<TracksDto>(200, "Liked tracks"),
+        spotify_search(cx),
     ]);
     entries
+}
+
+fn spotify_search(cx: &Ctx<'_>) -> RouteEntry {
+    cx.route(
+        &Op::get(
+            "/spotify/search",
+            "search_spotify",
+            "spotify",
+            "Search all of Spotify for albums and tracks",
+        ),
+        |s, c, req| {
+            answer(spotify_search_query(req).and_then(|query| {
+                s.spotify_search(
+                    c,
+                    &query.q,
+                    query.limit.unwrap_or(crate::spotify::SEARCH_LIMIT),
+                )
+            }))
+        },
+    )
+    .query_schema::<SpotifySearchQuery>(true)
+    .response_schema::<crate::spotify::SearchDto>(200, "Matching albums and tracks")
 }
 
 #[derive(JsonSchema)]
@@ -347,6 +370,31 @@ fn spotify_list_query(req: &Request) -> Result<SpotifyListQuery, Failure> {
         limit,
         q: query_param(req, "q")?,
     })
+}
+
+#[derive(JsonSchema)]
+struct SpotifySearchQuery {
+    /// What to look for: an artist, song or album.
+    q: String,
+    /// 1 to 10 per kind, default 10.
+    limit: Option<usize>,
+}
+
+fn spotify_search_query(req: &Request) -> Result<SpotifySearchQuery, Failure> {
+    let q = query_param(req, "q")?
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if q.is_empty() {
+        return Err(Failure::invalid(
+            "say what to look for: GET /spotify/search?q=<words>",
+        ));
+    }
+    let limit = whole_number(req, "limit")?;
+    if limit.is_some_and(|n| n == 0 || n > crate::spotify::SEARCH_LIMIT) {
+        return Err(Failure::invalid("limit must be 1 to 10"));
+    }
+    Ok(SpotifySearchQuery { q, limit })
 }
 
 fn spotify_album_id(req: &Request) -> Result<String, Failure> {

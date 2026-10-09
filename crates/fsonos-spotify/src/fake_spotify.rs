@@ -157,6 +157,8 @@ fn respond(fake: &Mutex<Fake>, req: &Request) -> Response {
             200,
             rewrite(include_bytes!("../tests/fixtures/saved_tracks_page.json")),
         )
+    } else if uri.starts_with("/v1/search") {
+        search_response(uri)
     } else if uri.starts_with("/v1/albums/") && fake.rate_limit_albums > 0 {
         fake.rate_limit_albums -= 1;
         json(429, "").with_header("Retry-After", "1")
@@ -186,6 +188,41 @@ fn liked_page(uri: &str, count: usize, base: &str) -> Response {
             })).collect();
     let next = (end < count).then(|| format!("{base}/me/tracks?offset={end}&limit=50"));
     json(200, serde_json::json!({ "items":items, "next":next, "offset":offset, "limit":50, "total":count }).to_string())
+}
+
+/// `GET /v1/search`. The real API refuses `market=from_token` without the
+/// `user-read-private` scope, which this client never asks for.
+fn search_response(uri: &str) -> Response {
+    if uri.contains("market=from_token") {
+        return json(
+            403,
+            r#"{"error":{"status":403,"message":"Insufficient client scope"}}"#,
+        );
+    }
+    json(200, search_page())
+}
+
+/// The search body: one album, two tracks (one unplayable) and null entries,
+/// as the real search returns them.
+fn search_page() -> String {
+    let album = serde_json::json!({
+        "id": "SearchAlbum0000000001", "uri": "spotify:album:SearchAlbum0000000001",
+        "name": "Bach: The Well-Tempered Clavier", "album_type": "album",
+        "artists": [{"name": "Glenn Gould"}], "release_date": "1963-05-01", "total_tracks": 48,
+        "images": [{"url": "https://cdn.example.invalid/search.jpg"}]
+    });
+    let track = |n: u8, playable: bool| {
+        serde_json::json!({
+            "id": format!("SearchTrack000000000{n}"), "uri": format!("spotify:track:SearchTrack000000000{n}"),
+            "name": format!("Prelude {n}"), "artists": [{"name": "Glenn Gould"}], "duration_ms": 199_500,
+            "disc_number": 1, "track_number": n, "is_playable": playable, "album": album.clone()
+        })
+    };
+    serde_json::json!({
+        "albums": { "items": [null, album], "total": 1, "limit": 5, "offset": 0, "next": null },
+        "tracks": { "items": [track(1, true), track(2, false), null], "total": 2, "limit": 5, "offset": 0, "next": null }
+    })
+    .to_string()
 }
 
 fn not_found() -> Response {

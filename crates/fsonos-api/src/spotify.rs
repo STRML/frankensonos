@@ -220,23 +220,135 @@ fn validate_exchange(input: &ExchangeRequest, redirect: &str) -> Result<Pkce, Fa
     })
 }
 
+/// Spotify's cap on results per kind for a search, and the default.
+pub(crate) const SEARCH_LIMIT: usize = 10;
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct SearchDto {
+    pub albums: Vec<AlbumDto>,
+    pub tracks: Vec<LikedTrackDto>,
+}
+
+fn art_of(images: &[fsonos_spotify::client::AlbumImage]) -> Option<String> {
+    images.first().map(|image| image.url.clone())
+}
+
+fn album_dto(album: &fsonos_spotify::client::Album) -> AlbumDto {
+    AlbumDto {
+        id: album.id.clone(),
+        title: album.name.clone(),
+        artist: album
+            .artists
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+        year: album
+            .release_date
+            .as_deref()
+            .and_then(|date| date.get(..4))
+            .and_then(|year| year.parse().ok()),
+        tracks: album.total_tracks,
+        uri: album.uri.clone(),
+        art_url: art_of(&album.images),
+    }
+}
+
+fn track_dto(track: &fsonos_spotify::client::FullTrack) -> LikedTrackDto {
+    let position = |n: u32| (n > 0).then_some(n);
+    LikedTrackDto {
+        id: track
+            .uri
+            .strip_prefix("spotify:track:")
+            .unwrap_or_default()
+            .into(),
+        title: track.name.clone(),
+        artists: track.artists.iter().map(|a| a.name.clone()).collect(),
+        uri: track.uri.clone(),
+        duration_secs: (track.duration_ms > 0)
+            .then(|| u32::try_from(track.duration_ms.div_ceil(1000)).ok())
+            .flatten(),
+        disc: position(track.disc_number),
+        number: position(track.track_number),
+        album: Some(track.album.name.clone()),
+        art_url: art_of(&track.album.images),
+    }
+}
+
 impl Spotify {
-    fn fetch_album(&self, uri: &str) -> Result<Vec<TrackDto>, Failure> {
+    /// Fail unless the daemon holds a usable sign-in and is not mid-sign-in or
+    /// mid-sync. `purpose` completes "Spotify sign-in is required to ...".
+    fn ensure_ready(&self, purpose: &str) -> Result<(), Failure> {
         if self.config.is_none() {
             return Err(not_configured());
         }
-        {
-            let state = self.state.lock().map_err(|_| internal())?;
-            if !state.signed_in || state.reauthorize {
-                return Err(Failure::new(
-                    ErrorCode::SpotifyAuthRequired,
-                    "Spotify sign-in is required to fetch this album.",
-                ));
-            }
-            if state.authorizing || state.sync.running {
-                return Err(busy());
-            }
+        let state = self.state.lock().map_err(|_| internal())?;
+        if !state.signed_in || state.reauthorize {
+            return Err(Failure::new(
+                ErrorCode::SpotifyAuthRequired,
+                format!("Spotify sign-in is required to {purpose}."),
+            ));
         }
+        if state.authorizing || state.sync.running {
+            return Err(busy());
+        }
+        Ok(())
+    }
+
+    /// Search Spotify's whole catalog with the owner's sign-in.
+    fn search(&self, query: &str, limit: usize) -> Result<SearchDto, Failure> {
+        self.ensure_ready("search Spotify")?;
+        let limit = u32::try_from(limit.clamp(1, SEARCH_LIMIT)).unwrap_or(10);
+        let url = self.endpoints.search(query, limit);
+        let body = std::thread::scope(|scope| {
+            scope
+                .spawn(|| self.run_session(async |session, cx| session.get(cx, &url).await))
+                .join()
+                .map_err(|_| internal())?
+                .map_err(|err| {
+                    if matches!(
+                        err,
+                        SpotifyError::Auth(_) | SpotifyError::Api { status: 401, .. }
+                    ) {
+                        if let Ok(mut state) = self.state.lock() {
+                            state.reauthorize = true;
+                        }
+                        return Failure::new(
+                            ErrorCode::SpotifyAuthRequired,
+                            "Spotify sign-in expired; sign in again to search Spotify.",
+                        );
+                    }
+                    // Spotify's own message says why a search was refused (a plan or
+                    // app-mode limit, say); it carries no token.
+                    let why = match &err {
+                        SpotifyError::Api { status, body } => {
+                            format!("Spotify API returned HTTP {status}: {body}")
+                        }
+                        other => safe_error(other, self.cache.path()),
+                    };
+                    Failure::new(
+                        ErrorCode::UpnpFault,
+                        format!("could not search Spotify: {why}"),
+                    )
+                })
+        })?;
+        let found = fsonos_spotify::client::SearchResponse::parse(&body).map_err(|err| {
+            Failure::new(
+                ErrorCode::UpnpFault,
+                format!(
+                    "could not read Spotify's search reply: {}",
+                    safe_error(&err, self.cache.path())
+                ),
+            )
+        })?;
+        Ok(SearchDto {
+            albums: found.albums().into_iter().map(album_dto).collect(),
+            tracks: found.tracks().into_iter().map(track_dto).collect(),
+        })
+    }
+
+    fn fetch_album(&self, uri: &str) -> Result<Vec<TrackDto>, Failure> {
+        self.ensure_ready("fetch this album")?;
         // The existing client's runtime must run off the synchronous HTTP
         // handler's runtime thread, as sign-in and sync already do.
         let result = std::thread::scope(|scope| {
@@ -850,6 +962,19 @@ impl crate::Surface {
                 .map(AlbumDto::from)
                 .collect(),
         })
+    }
+
+    pub(crate) fn spotify_search(
+        &self,
+        client: &fsonos_core::policy::Client,
+        query: &str,
+        limit: usize,
+    ) -> Result<SearchDto, Failure> {
+        self.spotify_admit(client, "search_spotify", true, false)?;
+        self.spotify
+            .as_ref()
+            .ok_or_else(not_configured)?
+            .search(query, limit)
     }
 
     pub(crate) fn spotify_album_tracks(

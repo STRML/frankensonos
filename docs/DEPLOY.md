@@ -370,8 +370,15 @@ want clients to call, preserving its existing operation ids:
 ```toml
 [clients.unknown]
 allow = ["spotify_status", "spotify_sync", "list_spotify_albums",
-         "list_spotify_album_tracks", "list_spotify_tracks"]
+         "list_spotify_album_tracks", "list_spotify_tracks", "search_spotify"]
 ```
+
+`GET /spotify/search?q=<words>&limit=<1 to 10>` (`search_spotify`) searches all
+of Spotify's catalog, not just the synced library, and returns
+`{albums, tracks}` in the same shapes as `/spotify/albums` and
+`/spotify/tracks`. It needs the daemon's Spotify sign-in (409
+`SPOTIFY_AUTH_REQUIRED` otherwise) and no new scope. Playing a result uses the
+existing `play` operation.
 
 Restart the daemon after changing its policy or environment. The login and
 callback operations are `spotify_login` and `spotify_callback`; they always

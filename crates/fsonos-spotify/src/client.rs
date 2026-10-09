@@ -519,6 +519,19 @@ impl Endpoints {
         )
     }
 
+    /// Catalog search for albums and tracks, one page of each. Unlike the
+    /// library endpoints it reads all of Spotify and needs no extra scope.
+    /// It sends no `market`: `market=from_token` needs `user-read-private`,
+    /// and Spotify answers 403 "Insufficient client scope" without it.
+    #[must_use]
+    pub fn search(&self, query: &str, limit: u32) -> String {
+        format!(
+            "{}/search?q={}&type=album,track&limit={limit}",
+            self.api,
+            percent_encode(query)
+        )
+    }
+
     /// Whether `url` (e.g. a page's `next`) is under the Web API base — the
     /// bearer token is only ever sent there.
     #[must_use]
@@ -751,6 +764,42 @@ impl SavedTrack {
             explicit: track.explicit,
             origin: Origin::LikedTrack,
         })
+    }
+}
+
+/// `GET /search?type=album,track`. Spotify pads result pages with nulls, so
+/// every entry is optional.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SearchResponse {
+    #[serde(default)]
+    pub albums: Option<Paging<Option<Album>>>,
+    #[serde(default)]
+    pub tracks: Option<Paging<Option<FullTrack>>>,
+}
+
+impl SearchResponse {
+    pub fn parse(body: &[u8]) -> Result<Self, SpotifyError> {
+        serde_json::from_slice(body)
+            .map_err(|e| SpotifyError::Decode(format!("search response: {e}")))
+    }
+
+    /// The matching albums, nulls dropped.
+    #[must_use]
+    pub fn albums(&self) -> Vec<&Album> {
+        self.albums
+            .iter()
+            .flat_map(|page| page.items.iter().flatten())
+            .collect()
+    }
+
+    /// The matching tracks Sonos can render, nulls and unplayable ones dropped.
+    #[must_use]
+    pub fn tracks(&self) -> Vec<&FullTrack> {
+        self.tracks
+            .iter()
+            .flat_map(|page| page.items.iter().flatten())
+            .filter(|t| renderable(&t.uri, t.is_local, t.is_playable))
+            .collect()
     }
 }
 

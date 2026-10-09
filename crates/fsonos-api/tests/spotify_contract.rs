@@ -171,6 +171,7 @@ fn openapi_documents_all_spotify_operations_and_schemas() {
             "200",
         ),
         ("/spotify/tracks", "get", "list_spotify_tracks", "200"),
+        ("/spotify/search", "get", "search_spotify", "200"),
     ] {
         assert_eq!(spec["paths"][path][method]["operationId"], operation);
         assert!(
