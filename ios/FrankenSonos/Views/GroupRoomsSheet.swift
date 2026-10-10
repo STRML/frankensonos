@@ -92,7 +92,8 @@ struct DeviceVolumeRow: View {
     var editing = false
     @ScaledMetric private var rowHeight = 60.0
     private var zone: AudioZone { store.zone(for: room) }
-    private var checked: Bool { editing ? store.groupEditingRooms.contains(room) : zone.id == store.selectedZoneID }
+    private var checked: Bool { editing ? store.groupEditingRooms.contains(room) : store.selectedZone.roomNames.contains(room) }
+    private var lastMember: Bool { !editing && checked && store.selectedZone.roomNames.count == 1 }
     var body: some View {
         HStack(spacing: 10) {
             Button(action: select) {
@@ -120,10 +121,11 @@ struct DeviceVolumeRow: View {
                     if editing { store.beginVolume(room: room) } else { store.finishVolume(room: room) }
                 }).frame(height: 12)
             }
-            Button(action: select) {
+            Button(action: toggleMembership) {
                 Image(systemName: checked ? "checkmark.square.fill" : "square").font(.system(size: 20, weight: .light)).foregroundStyle(checked ? Color.primary : .secondary).frame(width: 32, height: 44)
             }
-            .buttonStyle(.plain).accessibilityLabel("\(editing ? "Include" : "Select") \(room)").accessibilityValue(checked ? "Selected" : "Not selected")
+            .buttonStyle(.plain).disabled(lastMember).opacity(lastMember ? 0.5 : 1)
+            .accessibilityLabel("Include \(room) in group").accessibilityValue(checked ? "Selected" : "Not selected")
         }
         .disabled(store.offlineRooms.contains(room)).opacity(store.offlineRooms.contains(room) ? 0.45 : 1)
         .padding(.horizontal, 16).frame(minHeight: rowHeight)
@@ -132,6 +134,14 @@ struct DeviceVolumeRow: View {
     private func select() {
         if editing { store.toggleGroupRoom(room) }
         else { store.selectedZoneID = zone.id }
+    }
+    /// Outside the Group editor the checkbox adds or removes the room from the selected zone's group at once.
+    private func toggleMembership() {
+        if editing { store.toggleGroupRoom(room); return }
+        let members = store.selectedZone.roomNames
+        let next = checked ? members.filter { $0 != room } : members + [room]
+        guard !next.isEmpty else { return }
+        store.setGroupedRooms(next, basedOn: store.selectedZoneID)
     }
 }
 
@@ -147,7 +157,7 @@ struct CompactRoomsSheet: View {
             HStack {
                 Text("Scroll rooms · Drag up to expand").s1Font(11).foregroundStyle(S1Palette.secondary(scheme)).lineLimit(1)
                 Spacer()
-                Button("Group") { store.isRoomsSheetPresented = false; store.beginGroupEditing(store.selectedZone) }.s1Font(12, weight: .semibold)
+                Text("Group").s1Font(12, weight: .semibold)
             }
             .buttonStyle(.plain).padding(.horizontal, 16).frame(height: 32)
             RoomVolumeList()
