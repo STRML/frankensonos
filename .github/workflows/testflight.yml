@@ -117,6 +117,18 @@ jobs:
           # enough to have been revoked, and only those: deleting a younger one orphans a certificate the account
           # still counts as live.
           ios/tools/drop-old-ci-identities "$KC"
+      # The identities dropped above leave their certificates live on the account until the cleanup job runs, and
+      # cloud signing reuses a live certificate whose private key is no longer here (archive fails with exit 65).
+      # Revoke them now so the archive makes a fresh one.
+      - name: Revoke old CI certificates before archiving
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_KEY_P8 }}
+          ASC_BYPASS_KEYCHAIN: "1"
+        run: |
+          brew list asc >/dev/null 2>&1 || brew install asc
+          ios/tools/revoke-ci-certificates
       - name: Archive
         working-directory: ios
         env:
